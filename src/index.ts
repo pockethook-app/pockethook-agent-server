@@ -83,17 +83,26 @@ Bun.serve({
 
     console.log(`[${new Date().toISOString()}] ${sessionId.slice(0, 8)}: ${chatInput.slice(0, 100)}`);
 
-    // Inject completed job results when polling triggers a fetch
+    // Direct delivery: if fetchPendingTasks and there are completed jobs, respond immediately without LLM
     const undelivered = getUndeliveredResults();
     if (undelivered.length > 0 && chatInput.toLowerCase().includes("fetchpendingtask")) {
-      const jobContext = undelivered.map((j) => {
-        const status = j.status === "completed" ? "completed" : "failed";
+      const jobResponses = undelivered.map((j) => {
+        const status = j.status === "completed" ? "✅" : "❌";
         const output = j.result || j.error || "No output";
-        return `[Job #${j.id} "${j.name}" ${status} at ${new Date(j.completed_at!).toISOString()}]\n${output}`;
-      }).join("\n\n");
+        return {
+          msg: `${status} Job #${j.id} "${j.name}"\n${output}`,
+          shortcut: undefined as string | undefined,
+          data: undefined as Record<string, unknown> | undefined,
+          url: undefined as string | undefined,
+        };
+      });
 
-      chatInput += `\n\n--- Completed Background Jobs ---\n${jobContext}`;
       markDelivered(undelivered.map((j) => j.id));
+      console.log(`[${sessionId.slice(0, 8)}] Delivered ${undelivered.length} job result(s) directly (no LLM)`);
+
+      return toResponse(
+        responses(jobResponses.map((r) => ({ msg: r.msg }))),
+      );
     }
 
     addUserMessage(sessionId, chatInput);
