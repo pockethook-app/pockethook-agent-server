@@ -10,9 +10,33 @@
 import { spawn, execSync } from "child_process";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import { loadConfig } from "./config.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 0; // 0 = auto-detect free port
+
+function printTunnelUrls(url: string, extra?: string): void {
+  const cfg = loadConfig();
+  console.log("");
+  p.log.success(pc.bold("Tunnel ready!"));
+  console.log("");
+  console.log(`  ${pc.bold("Server URL:")}    ${pc.green(url)}`);
+  console.log(`  ${pc.bold("Health check:")} ${pc.green(`${url}/health`)}`);
+  console.log(`  ${pc.bold("Jobs polling:")} ${pc.green(`${url}/jobs`)}`);
+  if (cfg.dashboardEnabled) {
+    console.log(`  ${pc.bold("Dashboard:")}    ${pc.green(`${url}/dashboard`)}`);
+  }
+  console.log("");
+  console.log(`  ${pc.dim("Copy the Server URL to FlowMate Settings → Server URL")}`);
+  console.log(`  ${pc.dim("Copy the Health check URL to FlowMate Settings → Health Check URL")}`);
+  console.log(`  ${pc.dim("Copy the Jobs polling URL to FlowMate Settings → Polling URL")}`);
+  if (extra) {
+    console.log("");
+    console.log(`  ${pc.dim(extra)}`);
+  }
+  console.log("");
+  console.log(`  ${pc.dim("Press Ctrl+C to stop the tunnel.")}`);
+}
 
 /** Get ports already used by tailscale serve */
 function getTailscaleServePorts(): Set<number> {
@@ -123,18 +147,7 @@ async function startTailscale(port: number): Promise<void> {
   const portSuffix = httpsPort === 443 ? "" : `:${httpsPort}`;
   const url = `https://${hostname}${portSuffix}`;
 
-  console.log("");
-  p.log.success(pc.bold("Tunnel ready!"));
-  console.log("");
-  console.log(`  ${pc.bold("Server URL:")}    ${pc.green(url)}`);
-  console.log(`  ${pc.bold("Health check:")} ${pc.green(`${url}/health`)}`);
-  console.log(`  ${pc.bold("Jobs polling:")} ${pc.green(`${url}/jobs`)}`);
-  console.log("");
-  console.log(`  ${pc.dim("Copy the Server URL to FlowMate Settings → Server URL")}`);
-  console.log(`  ${pc.dim("Copy the Health check URL to FlowMate Settings → Health Check URL")}`);
-  console.log(`  ${pc.dim("Copy the Jobs polling URL to FlowMate Settings → Polling URL")}`);
-  console.log("");
-  console.log(`  ${pc.dim("Press Ctrl+C to stop and remove the tunnel.")}`);
+  printTunnelUrls(url);
 
   const cleanup = () => {
     console.log(`\n${pc.dim("Removing Tailscale serve on port " + httpsPort + "...")}`);
@@ -182,18 +195,7 @@ async function startNgrok(port: number): Promise<void> {
     process.exit(1);
   }
 
-  console.log("");
-  p.log.success(pc.bold("Tunnel ready!"));
-  console.log("");
-  console.log(`  ${pc.bold("Server URL:")}    ${pc.green(url)}`);
-  console.log(`  ${pc.bold("Health check:")} ${pc.green(`${url}/health`)}`);
-  console.log(`  ${pc.bold("Jobs polling:")} ${pc.green(`${url}/jobs`)}`);
-  console.log("");
-  console.log(`  ${pc.dim("Copy the Server URL to FlowMate Settings → Server URL")}`);
-  console.log(`  ${pc.dim("Copy the Health check URL to FlowMate Settings → Health Check URL")}`);
-  console.log(`  ${pc.dim("Copy the Jobs polling URL to FlowMate Settings → Polling URL")}`);
-  console.log("");
-  console.log(`  ${pc.dim("Press Ctrl+C to stop the tunnel.")}`);
+  printTunnelUrls(url);
 
   child.on("close", (code) => {
     if (code !== null && code !== 0) {
@@ -241,19 +243,7 @@ async function startCloudflared(port: number): Promise<void> {
 
   await waitForUrl;
 
-  console.log("");
-  p.log.success(pc.bold("Tunnel ready!"));
-  console.log("");
-  console.log(`  ${pc.bold("Server URL:")}    ${pc.green(url!)}`);
-  console.log(`  ${pc.bold("Health check:")} ${pc.green(`${url!}/health`)}`);
-  console.log(`  ${pc.bold("Jobs polling:")} ${pc.green(`${url!}/jobs`)}`);
-  console.log("");
-  console.log(`  ${pc.dim("Copy the Server URL to FlowMate Settings → Server URL")}`);
-  console.log(`  ${pc.dim("Copy the Health check URL to FlowMate Settings → Health Check URL")}`);
-  console.log(`  ${pc.dim("Copy the Jobs polling URL to FlowMate Settings → Polling URL")}`);
-  console.log("");
-  console.log(`  ${pc.dim("Note: Cloudflare quick tunnels generate a new URL each time.")}`);
-  console.log(`  ${pc.dim("Press Ctrl+C to stop the tunnel.")}`);
+  printTunnelUrls(url!, "Note: Cloudflare quick tunnels generate a new URL each time.");
 
   child.on("close", (code) => {
     if (code !== null && code !== 0) {

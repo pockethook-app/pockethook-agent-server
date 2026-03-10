@@ -12,6 +12,7 @@ import {
 import { memoryStats } from "./memory.js";
 import { loadPermissions } from "./permissions.js";
 import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
+import { getDashboardHtml, getJobsJson } from "./dashboard.js";
 
 const config = loadConfig();
 const permissions = loadPermissions(process.env.TOOLS);
@@ -61,6 +62,26 @@ Bun.serve({
       const pending = hasUndeliveredResults();
       console.log(`[${new Date().toISOString()}] GET /jobs → ${pending}`);
       return new Response(pending ? "true" : "false", { status: 200 });
+    }
+
+    if (req.method === "GET" && url.pathname === "/dashboard") {
+      if (!config.dashboardEnabled) {
+        return new Response("Dashboard is disabled. Set DASHBOARD=true in .env to enable.", { status: 404 });
+      }
+      return new Response(getDashboardHtml(), {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/jobs") {
+      if (!config.dashboardEnabled) {
+        return new Response("Not Found", { status: 404 });
+      }
+      return new Response(JSON.stringify(getJobsJson()), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     if (req.method !== "POST" || url.pathname !== "/") {
@@ -185,4 +206,7 @@ console.log(`\nflowmate-agent-server running on ${base}`);
 console.log(`  POST ${base}/           → Chat`);
 console.log(`  GET  ${base}/health     → Health check`);
 console.log(`  GET  ${base}/jobs       → Jobs polling`);
+if (config.dashboardEnabled) {
+  console.log(`  GET  ${base}/dashboard  → Dashboard`);
+}
 console.log(`\nLLM: ${config.llmProvider}/${config.llmModel}`);

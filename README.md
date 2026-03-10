@@ -76,6 +76,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `SESSION_TTL_MINUTES` | `60` | Session expiration time |
 | `WORKING_DIR` | Current directory | Agent's restricted working directory |
 | `FETCH_MESSAGE` | `fetchPendingTasks` | Message that triggers job result delivery |
+| `DASHBOARD` | `true` | Enable web dashboard (`/dashboard` route) |
 | `TOOLS` | `all` | Enabled tools (see Permissions) |
 
 ### Supported providers
@@ -106,6 +107,10 @@ Response:
 ```json
 [{"msg": "response text", "shortcut": "ShortcutName", "data": {"key": "value"}, "url": "https://..."}]
 ```
+
+### `GET /dashboard` — Web dashboard
+
+Shows a live overview of background jobs with status, schedule, and output. Auto-refreshes every 30 seconds. Disabled when `DASHBOARD=false`.
 
 ### `GET /health` — Health check
 
@@ -251,6 +256,7 @@ flowmate-agent-server/
 ├── src/
 │   ├── index.ts          # HTTP server, routing, job delivery
 │   ├── config.ts         # Config loading, system prompt, hot-reload
+│   ├── dashboard.ts      # Web dashboard HTML and jobs API
 │   ├── llm.ts            # Agent execution, LLM communication
 │   ├── tools.ts          # Tool implementations (shell, read, write, ls, jobs)
 │   ├── jobs.ts           # Background job system, cron scheduler

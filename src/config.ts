@@ -16,6 +16,7 @@ export interface Config {
   sessionTtlMs: number;
   workingDir: string;
   fetchMessage: string;
+  dashboardEnabled: boolean;
   oauthRefreshToken?: string;
   oauthTokenExpires?: number;
 }
@@ -222,6 +223,7 @@ export function loadConfig(): Config {
     sessionTtlMs: (Number(process.env.SESSION_TTL_MINUTES) || 60) * 60 * 1000,
     workingDir: process.env.WORKING_DIR || process.cwd(),
     fetchMessage: (process.env.FETCH_MESSAGE || "fetchPendingTasks").toLowerCase(),
+    dashboardEnabled: process.env.DASHBOARD !== "false",
     oauthRefreshToken: process.env.OAUTH_REFRESH_TOKEN,
     oauthTokenExpires: process.env.OAUTH_TOKEN_EXPIRES ? Number(process.env.OAUTH_TOKEN_EXPIRES) : undefined,
   };

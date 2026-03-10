@@ -237,6 +237,17 @@ async function setup() {
   if (p.isCancel(fetchMessage)) cancelled();
   env.FETCH_MESSAGE = fetchMessage;
 
+  const dashboard = await p.confirm({
+    message: "Enable web dashboard? (/dashboard route)",
+    initialValue: env.DASHBOARD !== "false",
+  });
+  if (p.isCancel(dashboard)) cancelled();
+  if (!dashboard) {
+    env.DASHBOARD = "false";
+  } else {
+    delete env.DASHBOARD; // defaults to enabled when absent
+  }
+
   await configureAuth(provider, env);
 
   // Permissions

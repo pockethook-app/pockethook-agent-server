@@ -18,6 +18,7 @@ import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import { loadConfig } from "./config.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DATA_DIR = join(PROJECT_ROOT, "data");
@@ -127,6 +128,7 @@ function generatePlist(): string {
   <array>
     <string>${bunPath}</string>
     <string>run</string>
+    <string>--watch</string>
     <string>${indexPath}</string>
   </array>
   <key>WorkingDirectory</key>
@@ -208,7 +210,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=${PROJECT_ROOT}
-ExecStart=${bunPath} run ${indexPath}
+ExecStart=${bunPath} run --watch ${indexPath}
 Restart=always
 RestartSec=5
 Environment=PATH=${process.env.PATH}
@@ -278,7 +280,7 @@ function winInstall(): void {
   const logOut = join(DATA_DIR, "service.stdout.log");
   const logErr = join(DATA_DIR, "service.stderr.log");
 
-  execSync(`nssm install ${NSSM_NAME} "${bunPath}" run "${indexPath}"`, { stdio: "inherit" });
+  execSync(`nssm install ${NSSM_NAME} "${bunPath}" run --watch "${indexPath}"`, { stdio: "inherit" });
   execSync(`nssm set ${NSSM_NAME} AppDirectory "${PROJECT_ROOT}"`, { stdio: "inherit" });
   execSync(`nssm set ${NSSM_NAME} AppStdout "${logOut}"`, { stdio: "inherit" });
   execSync(`nssm set ${NSSM_NAME} AppStderr "${logErr}"`, { stdio: "inherit" });
@@ -373,10 +375,14 @@ async function setupTunnel(serverPort: number): Promise<TunnelConfig | null> {
         if (dns) {
           const portSuffix = httpsPort === 443 ? "" : `:${httpsPort}`;
           const url = `https://${dns}${portSuffix}`;
+          const cfg = loadConfig();
           console.log("");
           console.log(`  ${pc.bold("Server URL:")}    ${pc.green(url)}`);
           console.log(`  ${pc.bold("Health check:")} ${pc.green(`${url}/health`)}`);
           console.log(`  ${pc.bold("Jobs polling:")} ${pc.green(`${url}/jobs`)}`);
+          if (cfg.dashboardEnabled) {
+            console.log(`  ${pc.bold("Dashboard:")}    ${pc.green(`${url}/dashboard`)}`);
+          }
           console.log("");
         }
       } catch {}
