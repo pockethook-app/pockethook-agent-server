@@ -434,7 +434,7 @@ async function schedulerTick(): Promise<void> {
   const now = Date.now();
 
   const dueJobs = d.query(
-    "SELECT * FROM jobs WHERE enabled = 1 AND status != 'running' AND next_run_at <= ? ORDER BY next_run_at ASC",
+    "SELECT * FROM jobs WHERE enabled = 1 AND status = 'pending' AND next_run_at <= ? ORDER BY next_run_at ASC",
   ).all(now) as Job[];
 
   for (const job of dueJobs) {
