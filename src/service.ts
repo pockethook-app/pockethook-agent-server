@@ -99,11 +99,23 @@ const LAUNCHD_PLIST = join(
   `${LAUNCHD_LABEL}.plist`,
 );
 
+function getLogDir(): string {
+  // Use ~/Library/Logs for macOS (always available, even for external drives)
+  // Use DATA_DIR for other platforms
+  if (PLATFORM === "darwin") {
+    const logDir = join(process.env.HOME || "~", "Library", "Logs", "flowmate-agent-server");
+    if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+    return logDir;
+  }
+  return DATA_DIR;
+}
+
 function generatePlist(): string {
   const bunPath = getBunPath();
   const indexPath = join(PROJECT_ROOT, "src", "index.ts");
-  const logOut = join(DATA_DIR, "service.stdout.log");
-  const logErr = join(DATA_DIR, "service.stderr.log");
+  const logDir = getLogDir();
+  const logOut = join(logDir, "service.stdout.log");
+  const logErr = join(logDir, "service.stderr.log");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -443,7 +455,7 @@ async function install() {
     });
 
     s.stop("Service installed and running!");
-    p.log.info(`Logs: ${pc.dim(join(DATA_DIR, "service.stderr.log"))}`);
+    p.log.info(`Logs: ${pc.dim(join(getLogDir(), "service.stderr.log"))}`);
     p.outro(pc.green("Done!"));
   } catch (err) {
     s.stop();
@@ -534,7 +546,7 @@ async function status() {
       console.log(`  ${pc.bold("Tunnel:")}   ${meta.tunnelType} (port ${meta.tunnelPort})`);
     }
     console.log(`  ${pc.bold("Installed:")} ${meta.installedAt}`);
-    console.log(`  ${pc.bold("Logs:")}      ${pc.dim(join(DATA_DIR, "service.stderr.log"))}`);
+    console.log(`  ${pc.bold("Logs:")}      ${pc.dim(join(getLogDir(), "service.stderr.log"))}`);
   } else {
     console.log(`  ${pc.dim("No service metadata found.")}`);
   }
