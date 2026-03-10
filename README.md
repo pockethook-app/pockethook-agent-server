@@ -268,6 +268,11 @@ flowmate-agent-server/
 └── .env                  # Runtime configuration
 ```
 
+## Acknowledgments
+
+- **[pi-mono](https://github.com/nickarino/pi-mono)** — The agent framework and multi-provider LLM abstraction (`pi-agent-core` and `pi-ai`) that power this server. Without their work, this project wouldn't be possible.
+- **[OpenClaw](https://github.com/nickarino/openclaw)** — The inspiration behind creating this server. OpenClaw pioneered the concept of connecting LLMs with iOS Shortcuts, and this project builds on that vision with a different architecture.
+
 ## License
 
 MIT
