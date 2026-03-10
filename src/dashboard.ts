@@ -1,9 +1,23 @@
 /**
  * Dashboard HTML template.
- * Serves a single-page dashboard showing jobs status.
+ *
+ * If a custom `dashboard.html` exists in the project root, it is served
+ * instead of the built-in default. The file is hot-reloaded on change
+ * (checked via mtime). The agent can edit this file on the user's behalf.
+ *
+ * The custom HTML can fetch `/api/jobs` for job data.
  */
 
+import { existsSync, readFileSync, statSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { listJobs } from "./jobs.js";
+
+const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const CUSTOM_DASHBOARD_PATH = join(PROJECT_ROOT, "dashboard.html");
+
+let cachedCustomHtml: string | null = null;
+let cachedCustomMtime: number = 0;
 
 export function getJobsJson(): object {
   const jobs = listJobs();
@@ -25,7 +39,30 @@ export function getJobsJson(): object {
 }
 
 export function getDashboardHtml(): string {
-  return `<!DOCTYPE html>
+  // Check for custom dashboard.html (hot-reloaded)
+  try {
+    if (existsSync(CUSTOM_DASHBOARD_PATH)) {
+      const mtime = statSync(CUSTOM_DASHBOARD_PATH).mtimeMs;
+      if (mtime !== cachedCustomMtime || cachedCustomHtml === null) {
+        cachedCustomHtml = readFileSync(CUSTOM_DASHBOARD_PATH, "utf-8");
+        cachedCustomMtime = mtime;
+        console.log("Custom dashboard.html reloaded.");
+      }
+      return cachedCustomHtml;
+    }
+  } catch {}
+
+  // Reset cache if file was deleted
+  if (cachedCustomHtml !== null && !existsSync(CUSTOM_DASHBOARD_PATH)) {
+    cachedCustomHtml = null;
+    cachedCustomMtime = 0;
+    console.log("Custom dashboard.html removed, using default.");
+  }
+
+  return DEFAULT_DASHBOARD_HTML;
+}
+
+const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -363,4 +400,3 @@ export function getDashboardHtml(): string {
 </script>
 </body>
 </html>`;
-}

@@ -112,6 +112,8 @@ Response:
 
 Shows a live overview of background jobs with status, schedule, and output. Auto-refreshes every 30 seconds. Disabled when `DASHBOARD=false`.
 
+Fully customizable: place a `dashboard.html` file in the project root to override the built-in default. The file is hot-reloaded on change. The agent can also edit it when asked by the user — each user gets a unique, personalized dashboard.
+
 ### `GET /health` — Health check
 
 Returns plain text `true` with status 200. Configure in FlowMate as the Health Check URL.
@@ -269,6 +271,7 @@ flowmate-agent-server/
 │   └── dev-tunnel.ts     # Combined dev server + tunnel
 ├── skills/               # Hot-reloadable shortcut definitions
 ├── data/                 # Runtime data (SQLite, service metadata)
+├── dashboard.html        # Custom dashboard (optional, hot-reloaded)
 ├── agent-instructions.md # Editable agent behavior (hot-reloaded)
 ├── permissions.json      # Tool permissions config
 └── .env                  # Runtime configuration

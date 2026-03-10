@@ -81,6 +81,19 @@ Example:
 
 Use kebab-case for file names (e.g., new-playlist.md, send-email.md).
 
+## Dashboard customization
+
+The user has a personal web dashboard at /dashboard. It is an HTML file that can be fully customized.
+
+To customize, edit the file: ${join(PROJECT_ROOT, "dashboard.html")}
+
+- If the file exists, it is served instead of the built-in default.
+- Changes are picked up automatically (hot-reloaded).
+- The dashboard can fetch \`/api/jobs\` to get job data as JSON.
+- The HTML is a complete standalone page (inline CSS and JS).
+- If the user asks to change the dashboard (add sections, change colors, show different data, etc.), read the current file, modify it, and write it back.
+- If no custom file exists yet, create one based on the user's requirements. You can start from scratch or fetch /api/jobs for the data structure.
+
 ## Examples
 
 Simple reply:
