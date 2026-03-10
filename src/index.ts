@@ -177,5 +177,9 @@ Bun.serve({
   },
 });
 
-console.log(`flowmate-agent-server running on http://localhost:${config.port}`);
-console.log(`LLM provider: ${config.llmProvider}, model: ${config.llmModel}`);
+const base = `http://localhost:${config.port}`;
+console.log(`\nflowmate-agent-server running on ${base}`);
+console.log(`  POST ${base}/           → Chat`);
+console.log(`  GET  ${base}/health     → Health check`);
+console.log(`  GET  ${base}/jobs       → Jobs polling`);
+console.log(`\nLLM: ${config.llmProvider}/${config.llmModel}`);
