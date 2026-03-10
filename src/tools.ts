@@ -466,13 +466,17 @@ function createWebFetchTool(): AgentTool<typeof webFetchSchema> {
     parameters: webFetchSchema,
     async execute(_id, params) {
       try {
-        // Use Jina Reader to get clean markdown content
+        // Use Jina Reader to get clean markdown content (30s timeout)
         const jinaUrl = `https://r.jina.ai/${params.url}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30_000);
         const res = await fetch(jinaUrl, {
           headers: {
             "Accept": "text/markdown",
           },
+          signal: controller.signal,
         });
+        clearTimeout(timeout);
 
         if (!res.ok) {
           throw new Error(`Jina Reader returned ${res.status}`);
