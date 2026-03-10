@@ -18,6 +18,14 @@ import { checkRateLimit, configureRateLimit } from "./rate-limit.js";
 import { logger } from "./logger.js";
 
 const config = loadConfig();
+
+// Configure rate limiting from env
+const rateLimitMax = Number(process.env.RATE_LIMIT_MAX) || undefined;
+const rateLimitWindow = Number(process.env.RATE_LIMIT_WINDOW_MS) || undefined;
+if (rateLimitMax || rateLimitWindow) {
+  configureRateLimit({ maxRequests: rateLimitMax, windowMs: rateLimitWindow });
+}
+
 const permissions = loadPermissions(process.env.TOOLS);
 const tools = createTools(config.workingDir, permissions, config);
 
