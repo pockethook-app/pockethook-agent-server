@@ -1,6 +1,6 @@
 ### New Note
 
-Shortcut name: `New Note`
+Shortcut name: `newNote`
 
 Creates a new note on the user's device.
 
