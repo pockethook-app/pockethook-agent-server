@@ -74,7 +74,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `AGENT_NAME` | `FlowMate Assistant` | How the agent introduces itself |
 | `MAX_HISTORY` | `50` | Messages kept in short-term memory per session |
 | `SESSION_TTL_MINUTES` | `60` | Session expiration time |
-| `WORKING_DIR` | Current directory | Agent's restricted working directory |
+| `WORKING_DIR` | `workspace/` | Agent's restricted working directory |
 | `FETCH_MESSAGE` | `fetchPendingTasks` | Message that triggers job result delivery |
 | `DASHBOARD` | `true` | Enable web dashboard (`/dashboard` route) |
 | `TOOLS` | `all` | Enabled tools (see Permissions) |
@@ -112,7 +112,7 @@ Response:
 
 Shows a live overview of background jobs with status, schedule, and output. Auto-refreshes every 30 seconds. Disabled when `DASHBOARD=false`.
 
-Fully customizable: place a `dashboard.html` file in the project root to override the built-in default. The file is hot-reloaded on change. The agent can also edit it when asked by the user — each user gets a unique, personalized dashboard.
+Fully customizable: place a `dashboard.html` in `workspace/dashboard/` to override the built-in default. The file is hot-reloaded on change. The agent can also edit it when asked by the user — each user gets a unique, personalized dashboard.
 
 ### `GET /health` — Health check
 
@@ -271,7 +271,8 @@ flowmate-agent-server/
 │   └── dev-tunnel.ts     # Combined dev server + tunnel
 ├── skills/               # Hot-reloadable shortcut definitions
 ├── data/                 # Runtime data (SQLite, service metadata)
-├── dashboard.html        # Custom dashboard (optional, hot-reloaded)
+├── workspace/            # Agent's working directory
+│   └── dashboard/        # Custom dashboard files (hot-reloaded)
 ├── agent-instructions.md # Editable agent behavior (hot-reloaded)
 ├── permissions.json      # Tool permissions config
 └── .env                  # Runtime configuration

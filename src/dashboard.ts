@@ -1,7 +1,7 @@
 /**
  * Dashboard HTML template.
  *
- * If a custom `dashboard.html` exists in the project root, it is served
+ * If a custom `dashboard.html` exists in workspace/dashboard/, it is served
  * instead of the built-in default. The file is hot-reloaded on change
  * (checked via mtime). The agent can edit this file on the user's behalf.
  *
@@ -14,7 +14,7 @@ import { fileURLToPath } from "url";
 import { listJobs } from "./jobs.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const CUSTOM_DASHBOARD_PATH = join(PROJECT_ROOT, "dashboard.html");
+const CUSTOM_DASHBOARD_PATH = join(PROJECT_ROOT, "workspace", "dashboard", "dashboard.html");
 
 let cachedCustomHtml: string | null = null;
 let cachedCustomMtime: number = 0;

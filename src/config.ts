@@ -81,11 +81,19 @@ Example:
 
 Use kebab-case for file names (e.g., new-playlist.md, send-email.md).
 
+## Workspace
+
+Your working directory is the \`workspace/\` folder. This is where you create projects, files, and other artifacts for the user. When the user asks to create a project (e.g., "create a Go + Templ project"), create it inside workspace/.
+
+The workspace structure:
+- \`workspace/\` — Your working directory. Create projects and files here.
+- \`workspace/dashboard/\` — Custom dashboard files served at /dashboard.
+
 ## Dashboard customization
 
 The user has a personal web dashboard at /dashboard. It is an HTML file that can be fully customized.
 
-To customize, edit the file: ${join(PROJECT_ROOT, "dashboard.html")}
+To customize, edit the file: ${join(PROJECT_ROOT, "workspace", "dashboard", "dashboard.html")}
 
 - If the file exists, it is served instead of the built-in default.
 - Changes are picked up automatically (hot-reloaded).
@@ -234,7 +242,7 @@ export function loadConfig(): Config {
     llmModel: process.env.LLM_MODEL || "claude-sonnet-4-20250514",
     maxHistory: Number(process.env.MAX_HISTORY) || 50,
     sessionTtlMs: (Number(process.env.SESSION_TTL_MINUTES) || 60) * 60 * 1000,
-    workingDir: process.env.WORKING_DIR || process.cwd(),
+    workingDir: process.env.WORKING_DIR || join(PROJECT_ROOT, "workspace"),
     fetchMessage: (process.env.FETCH_MESSAGE || "fetchPendingTasks").toLowerCase(),
     dashboardEnabled: process.env.DASHBOARD !== "false",
     oauthRefreshToken: process.env.OAUTH_REFRESH_TOKEN,

@@ -3,3 +3,8 @@ dist/
 data/
 .env
 *.log
+workspace/*
+!workspace/.gitkeep
+!workspace/dashboard/
+workspace/dashboard/*
+!workspace/dashboard/.gitkeep
