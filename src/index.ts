@@ -87,7 +87,7 @@ Bun.serve({
 
     // Direct delivery: if fetchPendingTasks and there are completed jobs, respond immediately without LLM
     const undelivered = getUndeliveredResults();
-    if (undelivered.length > 0 && chatInput.toLowerCase().includes("fetchpendingtask")) {
+    if (undelivered.length > 0 && chatInput.toLowerCase().includes(config.fetchMessage)) {
       const jobResponses: { msg: string; shortcut?: string; data?: Record<string, unknown>; url?: string }[] = [];
 
       for (const j of undelivered) {

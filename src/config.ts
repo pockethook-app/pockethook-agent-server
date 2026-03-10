@@ -15,6 +15,7 @@ export interface Config {
   maxHistory: number;
   sessionTtlMs: number;
   workingDir: string;
+  fetchMessage: string;
   oauthRefreshToken?: string;
   oauthTokenExpires?: number;
 }
@@ -220,6 +221,7 @@ export function loadConfig(): Config {
     maxHistory: Number(process.env.MAX_HISTORY) || 50,
     sessionTtlMs: (Number(process.env.SESSION_TTL_MINUTES) || 60) * 60 * 1000,
     workingDir: process.env.WORKING_DIR || process.cwd(),
+    fetchMessage: (process.env.FETCH_MESSAGE || "fetchPendingTasks").toLowerCase(),
     oauthRefreshToken: process.env.OAUTH_REFRESH_TOKEN,
     oauthTokenExpires: process.env.OAUTH_TOKEN_EXPIRES ? Number(process.env.OAUTH_TOKEN_EXPIRES) : undefined,
   };
