@@ -14,8 +14,30 @@ import pc from "picocolors";
 const PORT = Number(process.env.PORT) || 3000;
 const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 0; // 0 = auto-detect free port
 
-/** Check if a port is in use */
-function isPortInUse(port: number): boolean {
+/** Get ports already used by tailscale serve */
+function getTailscaleServePorts(): Set<number> {
+  const ports = new Set<number>();
+  try {
+    const output = execSync("tailscale serve status", { encoding: "utf-8" });
+    // Matches lines like "https://hostname:PORT" or "https://hostname (Funnel on)" (default = 443)
+    for (const line of output.split("\n")) {
+      const withPort = line.match(/https:\/\/[^:]+:(\d+)/);
+      if (withPort) {
+        ports.add(parseInt(withPort[1]!, 10));
+        continue;
+      }
+      // Default port 443: "https://hostname (..." or "https://hostname\n"
+      if (line.match(/^https:\/\/[^\s:]+[\s(]/)) {
+        ports.add(443);
+      }
+    }
+  } catch {}
+  return ports;
+}
+
+/** Check if a port is in use (local process or tailscale serve) */
+function isPortInUse(port: number, tailscalePorts: Set<number>): boolean {
+  if (tailscalePorts.has(port)) return true;
   try {
     execSync(`lsof -i :${port} -sTCP:LISTEN`, { stdio: "ignore" });
     return true;
@@ -24,17 +46,18 @@ function isPortInUse(port: number): boolean {
   }
 }
 
-/** Find a free HTTPS port starting from 443, then 8443, 9443, etc. */
+/** Find a free HTTPS port not used by tailscale or local processes */
 function findFreeHttpsPort(): number {
-  const candidates = [443, 8443, 9443, 10443, 3443];
+  const tailscalePorts = getTailscaleServePorts();
+  const candidates = [443, 8443, 9443, 10443, 3443, 4443, 5443];
   for (const port of candidates) {
-    if (!isPortInUse(port)) return port;
+    if (!isPortInUse(port, tailscalePorts)) return port;
   }
-  // Fallback: try random high ports
-  for (let port = 4430; port < 4440; port++) {
-    if (!isPortInUse(port)) return port;
+  // Fallback: try sequential ports
+  for (let port = 4430; port < 4450; port++) {
+    if (!isPortInUse(port, tailscalePorts)) return port;
   }
-  return 8443; // Last resort
+  return 8443;
 }
 
 interface TunnelProvider {
