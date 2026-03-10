@@ -86,20 +86,181 @@ function getDb(): Database {
 
 // ── Schedule parsing ─────────────────────────────────────────────────────
 
-const UNITS: Record<string, number> = {
+// Simple intervals: 30s, 5m, 1h, 1d, 2w
+const INTERVAL_UNITS: Record<string, number> = {
   s: 1_000,
   m: 60_000,
   h: 3_600_000,
   d: 86_400_000,
+  w: 604_800_000,
 };
 
 export function parseInterval(input: string): number | null {
-  const match = input.trim().match(/^(\d+)(s|m|h|d)$/i);
+  const match = input.trim().match(/^(\d+)(s|m|h|d|w)$/i);
   if (!match) return null;
   const value = parseInt(match[1]!, 10);
   const unit = match[2]!.toLowerCase();
   if (value <= 0) return null;
-  return value * (UNITS[unit] ?? 0);
+  return value * (INTERVAL_UNITS[unit] ?? 0);
+}
+
+/** Returns true if the schedule string is a simple interval (5m, 1h, etc.) */
+export function isInterval(schedule: string): boolean {
+  return /^\d+(s|m|h|d|w)$/i.test(schedule.trim());
+}
+
+// ── Cron expression parser ───────────────────────────────────────────────
+// Format: minute hour day-of-month month day-of-week
+// Supports: *, ranges (1-5), steps (*/5, 1-10/2), lists (1,3,5)
+// Day names: SUN=0, MON=1, ..., SAT=6
+// Month names: JAN=1, ..., DEC=12
+
+const DAY_NAMES: Record<string, number> = {
+  SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6,
+};
+const MONTH_NAMES: Record<string, number> = {
+  JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
+  JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12,
+};
+
+function parseField(field: string, min: number, max: number, names?: Record<string, number>): Set<number> | null {
+  const values = new Set<number>();
+
+  for (const part of field.split(",")) {
+    let token = part.trim().toUpperCase();
+
+    // Replace names with numbers
+    if (names) {
+      for (const [name, num] of Object.entries(names)) {
+        token = token.replace(new RegExp(`\\b${name}\\b`, "g"), String(num));
+      }
+    }
+
+    // */step
+    const stepAll = token.match(/^\*\/(\d+)$/);
+    if (stepAll) {
+      const step = parseInt(stepAll[1]!, 10);
+      if (step <= 0) return null;
+      for (let i = min; i <= max; i += step) values.add(i);
+      continue;
+    }
+
+    // *
+    if (token === "*") {
+      for (let i = min; i <= max; i++) values.add(i);
+      continue;
+    }
+
+    // range/step: 1-10/2
+    const rangeStep = token.match(/^(\d+)-(\d+)\/(\d+)$/);
+    if (rangeStep) {
+      const start = parseInt(rangeStep[1]!, 10);
+      const end = parseInt(rangeStep[2]!, 10);
+      const step = parseInt(rangeStep[3]!, 10);
+      if (start < min || end > max || step <= 0) return null;
+      for (let i = start; i <= end; i += step) values.add(i);
+      continue;
+    }
+
+    // range: 1-5
+    const range = token.match(/^(\d+)-(\d+)$/);
+    if (range) {
+      const start = parseInt(range[1]!, 10);
+      const end = parseInt(range[2]!, 10);
+      if (start < min || end > max) return null;
+      for (let i = start; i <= end; i++) values.add(i);
+      continue;
+    }
+
+    // single number
+    const num = parseInt(token, 10);
+    if (isNaN(num) || num < min || num > max) return null;
+    values.add(num);
+  }
+
+  return values.size > 0 ? values : null;
+}
+
+export interface CronFields {
+  minutes: Set<number>;
+  hours: Set<number>;
+  daysOfMonth: Set<number>;
+  months: Set<number>;
+  daysOfWeek: Set<number>;
+}
+
+export function parseCron(expression: string): CronFields | null {
+  const parts = expression.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+
+  const minutes = parseField(parts[0]!, 0, 59);
+  const hours = parseField(parts[1]!, 0, 23);
+  const daysOfMonth = parseField(parts[2]!, 1, 31);
+  const months = parseField(parts[3]!, 1, 12, MONTH_NAMES);
+  const daysOfWeek = parseField(parts[4]!, 0, 6, DAY_NAMES);
+
+  if (!minutes || !hours || !daysOfMonth || !months || !daysOfWeek) return null;
+
+  return { minutes, hours, daysOfMonth, months, daysOfWeek };
+}
+
+/**
+ * Calculate next run time from a cron expression.
+ * Searches up to 2 years ahead to find a match.
+ */
+export function nextCronDate(expression: string, after: Date = new Date()): Date | null {
+  const fields = parseCron(expression);
+  if (!fields) return null;
+
+  // Start from the next minute
+  const d = new Date(after.getTime());
+  d.setSeconds(0, 0);
+  d.setMinutes(d.getMinutes() + 1);
+
+  // Search up to ~2 years (enough for any valid cron)
+  const maxIterations = 366 * 24 * 60; // ~1 year in minutes
+  for (let i = 0; i < maxIterations; i++) {
+    if (
+      fields.months.has(d.getMonth() + 1) &&
+      fields.daysOfMonth.has(d.getDate()) &&
+      fields.daysOfWeek.has(d.getDay()) &&
+      fields.hours.has(d.getHours()) &&
+      fields.minutes.has(d.getMinutes())
+    ) {
+      return d;
+    }
+    d.setMinutes(d.getMinutes() + 1);
+  }
+
+  return null; // No match found
+}
+
+/**
+ * Calculate next run time from a schedule string.
+ * Supports both simple intervals (5m, 1h) and cron expressions (0 9 * * MON).
+ */
+export function nextRunFromSchedule(schedule: string, after: Date = new Date()): number | null {
+  if (isInterval(schedule)) {
+    const ms = parseInterval(schedule);
+    return ms ? after.getTime() + ms : null;
+  }
+  const next = nextCronDate(schedule, after);
+  return next ? next.getTime() : null;
+}
+
+/**
+ * Validate a schedule string (interval or cron expression).
+ */
+export function validateSchedule(schedule: string): { valid: boolean; error?: string } {
+  if (isInterval(schedule)) {
+    const ms = parseInterval(schedule);
+    return ms ? { valid: true } : { valid: false, error: `Invalid interval: ${schedule}. Use: 30s, 5m, 1h, 1d, 2w` };
+  }
+  const fields = parseCron(schedule);
+  if (!fields) {
+    return { valid: false, error: `Invalid schedule: ${schedule}. Use interval (5m, 1h, 1d, 2w) or cron expression (0 9 * * MON)` };
+  }
+  return { valid: true };
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────
@@ -114,22 +275,30 @@ export function createJob(opts: CreateJobOptions): Job {
   const now = Date.now();
 
   if (opts.type === "cron" && !opts.schedule) {
-    throw new Error("Cron jobs require a schedule (e.g., '5m', '1h', '1d')");
+    throw new Error("Cron jobs require a schedule (e.g., '5m', '1h', '0 9 * * MON')");
   }
 
   if (opts.schedule) {
-    const ms = parseInterval(opts.schedule);
-    if (!ms) throw new Error(`Invalid schedule format: ${opts.schedule}. Use: 30s, 5m, 1h, 1d`);
+    const check = validateSchedule(opts.schedule);
+    if (!check.valid) throw new Error(check.error);
   }
 
   let delayMs = 0;
   if (opts.delay) {
     const ms = parseInterval(opts.delay);
-    if (!ms) throw new Error(`Invalid delay format: ${opts.delay}. Use: 30s, 5m, 1h, 1d`);
+    if (!ms) throw new Error(`Invalid delay format: ${opts.delay}. Use: 30s, 5m, 1h, 1d, 2w`);
     delayMs = ms;
   }
 
-  const nextRunAt = now + delayMs;
+  let nextRunAt: number;
+  if (delayMs > 0) {
+    nextRunAt = now + delayMs;
+  } else if (opts.schedule && !isInterval(opts.schedule)) {
+    // Cron expression: calculate first run time
+    nextRunAt = nextRunFromSchedule(opts.schedule, new Date(now)) ?? now;
+  } else {
+    nextRunAt = now;
+  }
   const executionType = opts.execution_type ?? "shell";
 
   const result = d.run(
@@ -286,33 +455,32 @@ async function schedulerTick(): Promise<void> {
 
       if (ok) {
         console.log(`[Job #${job.id}] Completed successfully.`);
-        if (job.type === "cron" && job.schedule) {
-          // Reschedule cron job
-          const intervalMs = parseInterval(job.schedule)!;
+      } else {
+        console.log(`[Job #${job.id}] Failed: ${output.slice(0, 100)}`);
+      }
+
+      const resultField = ok ? "result" : "error";
+
+      if (job.type === "cron" && job.schedule) {
+        // Reschedule cron job
+        const nextRun = nextRunFromSchedule(job.schedule, new Date(completedAt));
+        if (nextRun) {
           d.run(
-            "UPDATE jobs SET status = 'pending', result = ?, completed_at = ?, next_run_at = ?, delivered = 0 WHERE id = ?",
-            [output || null, completedAt, completedAt + intervalMs, job.id],
+            `UPDATE jobs SET status = 'pending', ${resultField} = ?, completed_at = ?, next_run_at = ?, delivered = 0 WHERE id = ?`,
+            [output || null, completedAt, nextRun, job.id],
           );
         } else {
+          // Schedule couldn't be resolved — mark as failed
           d.run(
-            "UPDATE jobs SET status = 'completed', result = ?, completed_at = ?, delivered = 0 WHERE id = ?",
-            [output || null, completedAt, job.id],
+            "UPDATE jobs SET status = 'failed', error = ?, completed_at = ?, delivered = 0 WHERE id = ?",
+            ["Could not calculate next run time from schedule: " + job.schedule, completedAt, job.id],
           );
         }
       } else {
-        console.log(`[Job #${job.id}] Failed: ${output.slice(0, 100)}`);
-        if (job.type === "cron" && job.schedule) {
-          const intervalMs = parseInterval(job.schedule)!;
-          d.run(
-            "UPDATE jobs SET status = 'pending', error = ?, completed_at = ?, next_run_at = ?, delivered = 0 WHERE id = ?",
-            [output || null, completedAt, completedAt + intervalMs, job.id],
-          );
-        } else {
-          d.run(
-            "UPDATE jobs SET status = 'failed', error = ?, completed_at = ?, delivered = 0 WHERE id = ?",
-            [output || null, completedAt, job.id],
-          );
-        }
+        d.run(
+          `UPDATE jobs SET status = '${ok ? "completed" : "failed"}', ${resultField} = ?, completed_at = ?, delivered = 0 WHERE id = ?`,
+          [output || null, completedAt, job.id],
+        );
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

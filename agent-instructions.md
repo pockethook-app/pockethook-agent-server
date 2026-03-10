@@ -43,20 +43,58 @@ You can create background jobs that run on a schedule or as one-off tasks. Jobs 
 
 Use the `create_job` tool with these parameters:
 - **name**: descriptive name (e.g., "Daily disk check", "Build my-app")
-- **type**: `once` (run one time) or `cron` (repeat on interval)
-- **schedule**: required for cron jobs — use intervals like `30s`, `5m`, `1h`, `1d`
+- **type**: `once` (run one time) or `cron` (repeat on schedule)
+- **schedule**: required for cron jobs. Two formats supported:
+  - **Simple intervals**: `30s`, `5m`, `1h`, `1d`, `2w` (seconds, minutes, hours, days, weeks)
+  - **Cron expressions**: standard 5-field format `minute hour day-of-month month day-of-week`
 - **prompt**: what to execute — a shell command or a natural language prompt
 - **execution_type**: `shell` (default, runs bash command) or `prompt` (processed by the AI agent with full tool access)
 - **delay**: optional delay before first run (e.g., `5m`)
 
-### Examples
+### Schedule examples
 
-Schedule a disk space check every hour:
+| Schedule | Meaning |
+|----------|---------|
+| `5m` | Every 5 minutes |
+| `1h` | Every hour |
+| `1d` | Every day |
+| `2w` | Every 2 weeks |
+| `0 9 * * MON-FRI` | At 9:00 AM, Monday through Friday |
+| `0 9 * * MON` | At 9:00 AM every Monday |
+| `*/30 * * * *` | Every 30 minutes |
+| `0 0 * * *` | At midnight every day |
+| `0 8,20 * * *` | At 8:00 AM and 8:00 PM |
+| `0 0 1 * *` | At midnight on the 1st of each month |
+| `0 0 1 1 *` | At midnight on January 1st (yearly) |
+| `0 12 * * 0` | At noon every Sunday |
+
+### Cron field reference
+
 ```
-create_job({ name: "Disk check", type: "cron", schedule: "1h", prompt: "df -h", execution_type: "shell" })
+┌─── minute (0-59)
+│ ┌─── hour (0-23)
+│ │ ┌─── day of month (1-31)
+│ │ │ ┌─── month (1-12 or JAN-DEC)
+│ │ │ │ ┌─── day of week (0-6 or SUN-SAT, 0=Sunday)
+│ │ │ │ │
+* * * * *
 ```
 
-Run a one-time build:
+Supports: `*` (all), `1-5` (range), `*/5` (step), `1,3,5` (list), `1-10/2` (range with step).
+
+### Tool examples
+
+Every Monday at 9am:
+```
+create_job({ name: "Weekly report", type: "cron", schedule: "0 9 * * MON", prompt: "Generate weekly summary", execution_type: "prompt" })
+```
+
+Every 6 hours:
+```
+create_job({ name: "Health check", type: "cron", schedule: "6h", prompt: "curl -s https://api.example.com/status", execution_type: "shell" })
+```
+
+One-time build:
 ```
 create_job({ name: "Build project", type: "once", prompt: "cd /home/user/app && npm run build", execution_type: "shell" })
 ```
@@ -69,7 +107,7 @@ create_job({ name: "Build project", type: "once", prompt: "cd /home/user/app && 
 4. Completed job results are stored and flagged for delivery.
 5. The user's device polls `GET /jobs` — when it returns `true`, the device sends a fetch message.
 6. On fetch, completed results are included in the message context so you can report them to the user.
-7. Cron jobs automatically reschedule after each run.
+7. Cron jobs automatically reschedule after each run (next time calculated from schedule).
 
 ### When you receive a "fetchPendingTasks" message
 

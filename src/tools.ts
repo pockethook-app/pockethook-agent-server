@@ -12,7 +12,7 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { Permissions } from "./permissions.js";
 import { checkShellPermission, checkPathPermission } from "./permissions.js";
-import { createJob, listJobs, deleteJob, updateJobEnabled, parseInterval } from "./jobs.js";
+import { createJob, listJobs, deleteJob, updateJobEnabled } from "./jobs.js";
 import type { Job } from "./jobs.js";
 
 const MAX_OUTPUT = 50_000; // chars
@@ -248,7 +248,7 @@ const createJobSchema = Type.Object({
   type: Type.Union([Type.Literal("once"), Type.Literal("cron")], {
     description: "once = run once, cron = repeat on schedule",
   }),
-  schedule: Type.Optional(Type.String({ description: "Interval for cron jobs: '30s', '5m', '1h', '1d'. Required for cron type." })),
+  schedule: Type.Optional(Type.String({ description: "Schedule for cron jobs. Simple intervals: '30s', '5m', '1h', '1d', '2w'. Cron expressions: '0 9 * * MON' (at 9am every Monday), '*/30 * * * *' (every 30 min), '0 0 1 * *' (1st of each month). Required for cron type." })),
   prompt: Type.String({ description: "What to execute: shell command or agent prompt" }),
   execution_type: Type.Optional(Type.Union([Type.Literal("shell"), Type.Literal("prompt")], {
     description: "shell = run as bash command (default), prompt = send to AI agent",
