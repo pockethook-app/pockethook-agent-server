@@ -54,6 +54,8 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+const API_VERSION = "1";
+
 Bun.serve({
   port: config.port,
 
@@ -61,7 +63,7 @@ Bun.serve({
     const url = new URL(req.url);
 
     if (req.method === "GET" && url.pathname === "/health") {
-      return new Response("true", { status: 200 });
+      return new Response("true", { status: 200, headers: { "X-API-Version": API_VERSION } });
     }
 
     if (req.method === "GET" && url.pathname === "/jobs") {
