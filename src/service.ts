@@ -351,7 +351,7 @@ async function setupTunnel(serverPort: number): Promise<TunnelConfig | null> {
     const httpsPort = parseInt(portInput, 10);
 
     try {
-      execSync(`tailscale serve --https ${httpsPort} http://localhost:${serverPort}`, { stdio: "inherit" });
+      execSync(`tailscale serve --https ${httpsPort} http://localhost:${serverPort}`, { stdio: "pipe" });
       p.log.success(`Tailscale serve configured on port ${httpsPort}`);
 
       try {
