@@ -34,8 +34,10 @@ initJobs();
 initWorkspaceGit();
 
 // Chat function for prompt-type jobs — stores full FlowMate response as JSON
+const JOB_PREFIX = "[BACKGROUND JOB] You are running inside a background job. Do the work directly — do NOT create more jobs. Use web_search, web_fetch, shell, read, write tools directly to complete the task.\n\n";
+
 const jobChatFn = async (prompt: string): Promise<string> => {
-  const jobMessages = [{ role: "user" as const, content: prompt, timestamp: Date.now() }];
+  const jobMessages = [{ role: "user" as const, content: JOB_PREFIX + prompt, timestamp: Date.now() }];
   const result = await chat(config, getSystemPrompt(config.agentName), jobMessages, tools);
   return JSON.stringify(result);
 };

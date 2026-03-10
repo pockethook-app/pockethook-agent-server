@@ -3,7 +3,12 @@
     "shell",
     "read",
     "write",
-    "ls"
+    "ls",
+    "create_job",
+    "list_jobs",
+    "delete_job",
+    "web_search",
+    "web_fetch"
   ],
   "shell": {
     "blockedCommands": [],

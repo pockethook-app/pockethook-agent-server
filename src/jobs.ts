@@ -276,7 +276,14 @@ export function validateSchedule(schedule: string): { valid: boolean; error?: st
 // ── CRUD ─────────────────────────────────────────────────────────────────
 
 export function initJobs(): void {
-  getDb();
+  const d = getDb();
+
+  // Recover jobs stuck in 'running' from a previous crash/restart
+  const stuck = d.run("UPDATE jobs SET status = 'pending' WHERE status = 'running'");
+  if (stuck.changes > 0) {
+    console.log(`Recovered ${stuck.changes} stuck job(s) from 'running' → 'pending'.`);
+  }
+
   console.log("Jobs system initialized.");
 }
 
