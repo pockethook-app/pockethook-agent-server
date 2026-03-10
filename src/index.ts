@@ -10,12 +10,21 @@ import {
   cleanExpiredSessions,
 } from "./sessions.js";
 import { memoryStats } from "./memory.js";
+import { loadPermissions } from "./permissions.js";
 
 const config = loadConfig();
-const tools = createTools(config.workingDir, config.tools);
+const permissions = loadPermissions(process.env.TOOLS);
+const tools = createTools(config.workingDir, permissions);
 
-console.log(`Tools: [${tools.map((t) => t.name).join(", ")}]`);
+console.log(`Tools: [${permissions.tools.join(", ")}]`);
 console.log(`Working dir: ${config.workingDir}`);
+console.log(`Boundary: ${permissions.enforceWorkingDir ? "enforced" : "open"}`);
+if (permissions.shell.blockedCommands.length > 0) {
+  console.log(`Shell blocked: ${permissions.shell.blockedCommands.length} commands, ${permissions.shell.blockedPatterns.length} patterns`);
+}
+if (permissions.filesystem.blockedPaths.length > 0) {
+  console.log(`Filesystem blocked: ${permissions.filesystem.blockedPaths.join(", ")}`);
+}
 
 // Clean expired sessions periodically
 setInterval(() => {
@@ -62,11 +71,6 @@ Bun.serve({
     try {
       // Build context: recent messages + relevant memories from FTS5
       const messages = buildContext(sessionId, chatInput);
-      console.log(`[context] ${sessionId.slice(0, 8)}: ${messages.length} messages`);
-      for (const m of messages) {
-        const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-        console.log(`  [${m.role}] ${text.slice(0, 120)}`);
-      }
       const flowmateResponses = await chat(config, getSystemPrompt(config.agentName), messages, tools);
 
       // Store summary in session history

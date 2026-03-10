@@ -14,7 +14,6 @@ export interface Config {
   llmModel: string;
   maxHistory: number;
   sessionTtlMs: number;
-  tools: string;
   workingDir: string;
   oauthRefreshToken?: string;
   oauthTokenExpires?: number;
@@ -185,7 +184,6 @@ export function loadConfig(): Config {
     llmModel: process.env.LLM_MODEL || "claude-sonnet-4-20250514",
     maxHistory: Number(process.env.MAX_HISTORY) || 50,
     sessionTtlMs: (Number(process.env.SESSION_TTL_MINUTES) || 60) * 60 * 1000,
-    tools: process.env.TOOLS || "all",
     workingDir: process.env.WORKING_DIR || process.cwd(),
     oauthRefreshToken: process.env.OAUTH_REFRESH_TOKEN,
     oauthTokenExpires: process.env.OAUTH_TOKEN_EXPIRES ? Number(process.env.OAUTH_TOKEN_EXPIRES) : undefined,

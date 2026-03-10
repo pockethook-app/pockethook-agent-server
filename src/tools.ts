@@ -1,22 +1,30 @@
 /**
- * Agent tools — configurable via TOOLS env var.
+ * Agent tools with granular permission enforcement.
  *
- * Available: shell, read, write, ls
- * Presets: "all" | "readonly" (read + ls)
- * Custom: "shell,read,ls"
+ * Permissions are checked before each tool execution.
+ * Denied operations return an error result (the agent sees it and can adjust).
  */
 
 import { spawn } from "child_process";
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, readdirSync, statSync } from "fs";
 import { join, resolve } from "path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import type { Permissions } from "./permissions.js";
+import { checkShellPermission, checkPathPermission } from "./permissions.js";
 
 const MAX_OUTPUT = 50_000; // chars
 
 function truncate(text: string, max = MAX_OUTPUT): string {
   if (text.length <= max) return text;
   return text.slice(0, max) + `\n... [truncated, ${text.length} total chars]`;
+}
+
+function denied(reason: string): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text: `Permission denied: ${reason}` }],
+    details: { denied: true, reason },
+  };
 }
 
 // ── Shell tool ──────────────────────────────────────────────────────────
@@ -26,13 +34,16 @@ const shellSchema = Type.Object({
   timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 30)" })),
 });
 
-function createShellTool(cwd: string): AgentTool<typeof shellSchema> {
+function createShellTool(cwd: string, perms: Permissions): AgentTool<typeof shellSchema> {
   return {
     name: "shell",
     label: "Execute shell command",
     description: "Execute a shell command and return its output (stdout + stderr).",
     parameters: shellSchema,
     async execute(_id, params) {
+      const check = checkShellPermission(params.command, perms);
+      if (!check.allowed) return denied(check.reason!);
+
       const timeout = (params.timeout ?? 30) * 1000;
       return new Promise<AgentToolResult<unknown>>((res) => {
         let output = "";
@@ -72,7 +83,7 @@ const readSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max lines to read (default: all)" })),
 });
 
-function createReadTool(cwd: string): AgentTool<typeof readSchema> {
+function createReadTool(cwd: string, perms: Permissions): AgentTool<typeof readSchema> {
   return {
     name: "read",
     label: "Read file",
@@ -80,6 +91,9 @@ function createReadTool(cwd: string): AgentTool<typeof readSchema> {
     parameters: readSchema,
     async execute(_id, params) {
       const filePath = resolve(cwd, params.path);
+      const check = checkPathPermission(filePath, "read", cwd, perms);
+      if (!check.allowed) return denied(check.reason!);
+
       try {
         const content = readFileSync(filePath, "utf-8");
         const lines = content.split("\n");
@@ -108,7 +122,7 @@ const writeSchema = Type.Object({
   content: Type.String({ description: "Content to write to the file" }),
 });
 
-function createWriteTool(cwd: string): AgentTool<typeof writeSchema> {
+function createWriteTool(cwd: string, perms: Permissions): AgentTool<typeof writeSchema> {
   return {
     name: "write",
     label: "Write file",
@@ -116,6 +130,9 @@ function createWriteTool(cwd: string): AgentTool<typeof writeSchema> {
     parameters: writeSchema,
     async execute(_id, params) {
       const filePath = resolve(cwd, params.path);
+      const check = checkPathPermission(filePath, "write", cwd, perms);
+      if (!check.allowed) return denied(check.reason!);
+
       try {
         writeFileSync(filePath, params.content, "utf-8");
         return {
@@ -138,7 +155,7 @@ const lsSchema = Type.Object({
   path: Type.Optional(Type.String({ description: "Directory path (default: working directory)" })),
 });
 
-function createLsTool(cwd: string): AgentTool<typeof lsSchema> {
+function createLsTool(cwd: string, perms: Permissions): AgentTool<typeof lsSchema> {
   return {
     name: "ls",
     label: "List directory",
@@ -146,6 +163,9 @@ function createLsTool(cwd: string): AgentTool<typeof lsSchema> {
     parameters: lsSchema,
     async execute(_id, params) {
       const dirPath = resolve(cwd, params.path ?? ".");
+      const check = checkPathPermission(dirPath, "ls", cwd, perms);
+      if (!check.allowed) return denied(check.reason!);
+
       try {
         const entries = readdirSync(dirPath);
         const lines = entries.map((name) => {
@@ -195,10 +215,6 @@ export interface FlowMateResponse {
   url?: string;
 }
 
-/**
- * Creates the respond tool.
- * The callback is called when the LLM invokes it — the server uses this to build the HTTP response.
- */
 export function createRespondTool(
   onRespond: (responses: FlowMateResponse[]) => void,
 ): AgentTool<typeof respondSchema> {
@@ -227,28 +243,20 @@ export function createRespondTool(
 
 type ToolName = "shell" | "read" | "write" | "ls";
 
-const PRESETS: Record<string, ToolName[]> = {
-  all: ["shell", "read", "write", "ls"],
-  readonly: ["read", "ls"],
-};
-
-export function createTools(cwd: string, toolsConfig?: string): AgentTool<any>[] {
-  const config = toolsConfig || "all";
-  const names: ToolName[] = PRESETS[config] ?? (config.split(",").map((s) => s.trim()) as ToolName[]);
-
+export function createTools(cwd: string, perms: Permissions): AgentTool<any>[] {
   const factories: Record<ToolName, () => AgentTool<any>> = {
-    shell: () => createShellTool(cwd),
-    read: () => createReadTool(cwd),
-    write: () => createWriteTool(cwd),
-    ls: () => createLsTool(cwd),
+    shell: () => createShellTool(cwd, perms),
+    read: () => createReadTool(cwd, perms),
+    write: () => createWriteTool(cwd, perms),
+    ls: () => createLsTool(cwd, perms),
   };
 
   const tools: AgentTool<any>[] = [];
-  for (const name of names) {
-    const factory = factories[name];
+  for (const name of perms.tools) {
+    const factory = factories[name as ToolName];
     if (factory) {
       tools.push(factory());
-    } else {
+    } else if (name !== "respond") {
       console.warn(`Unknown tool: ${name}`);
     }
   }

@@ -1,0 +1,32 @@
+{
+  "tools": [
+    "shell",
+    "read",
+    "write",
+    "ls"
+  ],
+  "shell": {
+    "blockedCommands": [],
+    "blockedPatterns": [
+      "sudo\\s+",
+      "rm\\s+-rf\\s+/(?!\\w)",
+      ">\\s*/etc/",
+      "curl.*\\|.*sh",
+      "wget.*\\|.*sh"
+    ]
+  },
+  "filesystem": {
+    "blockedPaths": [
+      ".env",
+      ".git"
+    ],
+    "blockedPatterns": [
+      "*.key",
+      "*.pem",
+      "*.secret",
+      "*.credentials",
+      "id_rsa*"
+    ]
+  },
+  "enforceWorkingDir": true
+}
