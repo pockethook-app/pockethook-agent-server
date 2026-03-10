@@ -1,5 +1,5 @@
 import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "@flow-mate/sdk";
-import { loadConfig, getSystemPrompt } from "./config.js";
+import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale } from "./config.js";
 import { chat } from "./llm.js";
 import { createTools } from "./tools.js";
 import {
@@ -42,6 +42,16 @@ if (permissions.filesystem.blockedPaths.length > 0) {
 // Initialize jobs system and workspace versioning
 initJobs();
 initWorkspaceGit();
+
+// Locale: use manual config or auto-detect from IP
+if (config.locale) {
+  setLocale(config.locale);
+  logger.info("Locale configured", { country: config.locale.country, city: config.locale.city });
+} else {
+  autoDetectLocale(config).then(() => {
+    if (config.locale) setLocale(config.locale);
+  });
+}
 
 // Chat function for prompt-type jobs — stores full FlowMate response as JSON
 const JOB_PREFIX = "[BACKGROUND JOB] You are running inside a background job. Do the work directly — do NOT create more jobs. Use web_search, web_fetch, shell, read, write tools directly to complete the task.\n\n";
