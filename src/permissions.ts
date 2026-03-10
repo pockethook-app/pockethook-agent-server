@@ -121,20 +121,39 @@ export function checkShellPermission(command: string, perms: Permissions): Permi
     return { allowed: false, reason: "Shell tool is disabled" };
   }
 
-  const cmdLower = command.toLowerCase();
+  // Normalize: collapse whitespace, trim
+  const normalized = command.replace(/\s+/g, " ").trim();
+  const cmdLower = normalized.toLowerCase();
 
-  // Check blocked commands (substring match)
+  // Extract the base command (first word, handles pipes/chains)
+  const segments = normalized.split(/[|;&]/).map((s) => s.trim());
+
+  // Check blocked commands — match against each segment's leading command
   for (const blocked of perms.shell.blockedCommands) {
-    if (cmdLower.includes(blocked.toLowerCase())) {
+    const blockedLower = blocked.toLowerCase();
+    // Check full command substring
+    if (cmdLower.includes(blockedLower)) {
       return { allowed: false, reason: `Blocked command: ${blocked}` };
+    }
+    // Check each pipe/chain segment start
+    for (const seg of segments) {
+      if (seg.toLowerCase().startsWith(blockedLower)) {
+        return { allowed: false, reason: `Blocked command: ${blocked}` };
+      }
     }
   }
 
-  // Check blocked patterns (regex match)
+  // Check blocked patterns (regex match) against full command and each segment
   for (const pattern of perms.shell.blockedPatterns) {
     try {
-      if (new RegExp(pattern, "i").test(command)) {
+      const regex = new RegExp(pattern, "i");
+      if (regex.test(normalized)) {
         return { allowed: false, reason: `Blocked pattern: ${pattern}` };
+      }
+      for (const seg of segments) {
+        if (regex.test(seg)) {
+          return { allowed: false, reason: `Blocked pattern: ${pattern}` };
+        }
       }
     } catch (err) {
       logger.warn("Invalid shell blocked pattern, skipping", { pattern, error: err instanceof Error ? err.message : String(err) });
