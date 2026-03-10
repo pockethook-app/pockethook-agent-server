@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join, resolve, basename } from "path";
 import { fileURLToPath } from "url";
+import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PERMISSIONS_PATH = join(PROJECT_ROOT, "permissions.json");
@@ -81,8 +82,8 @@ export function loadPermissions(toolsEnvFallback?: string): Permissions {
         },
         enforceWorkingDir: raw.enforceWorkingDir ?? DEFAULT_PERMISSIONS.enforceWorkingDir,
       };
-    } catch {
-      console.warn("Invalid permissions.json, using defaults.");
+    } catch (err) {
+      logger.warn("Invalid permissions.json, using defaults", { error: err instanceof Error ? err.message : String(err) });
       return DEFAULT_PERMISSIONS;
     }
   }
@@ -135,8 +136,8 @@ export function checkShellPermission(command: string, perms: Permissions): Permi
       if (new RegExp(pattern, "i").test(command)) {
         return { allowed: false, reason: `Blocked pattern: ${pattern}` };
       }
-    } catch {
-      // Invalid regex, skip
+    } catch (err) {
+      logger.warn("Invalid shell blocked pattern, skipping", { pattern, error: err instanceof Error ? err.message : String(err) });
     }
   }
 

@@ -13,6 +13,7 @@ import { execSync } from "child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, copyFileSync } from "fs";
 import { dirname, join, basename, relative } from "path";
 import { fileURLToPath } from "url";
+import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const WORKSPACE_DIR = join(PROJECT_ROOT, "workspace");
@@ -45,7 +46,7 @@ let workspaceGitInitialized = false;
 export function initWorkspaceGit(): boolean {
   if (workspaceGitInitialized) return true;
   if (!hasGit()) {
-    console.log("Git not available — workspace versioning disabled.");
+    logger.info("Git not available — workspace versioning disabled");
     return false;
   }
 
@@ -63,13 +64,13 @@ export function initWorkspaceGit(): boolean {
         stdio: "ignore",
         env: { ...process.env, GIT_AUTHOR_NAME: "FlowMate", GIT_AUTHOR_EMAIL: "agent@flowmate", GIT_COMMITTER_NAME: "FlowMate", GIT_COMMITTER_EMAIL: "agent@flowmate" },
       });
-      console.log("Workspace git repo initialized.");
+      logger.info("Workspace git repo initialized");
     }
 
     workspaceGitInitialized = true;
     return true;
   } catch (err) {
-    console.error("Failed to initialize workspace git:", err instanceof Error ? err.message : err);
+    logger.error("Failed to initialize workspace git", { error: err instanceof Error ? err.message : String(err) });
     return false;
   }
 }

@@ -5,6 +5,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Config } from "./config.js";
 import { updateEnvFile } from "./config.js";
 import { createRespondTool, type FlowMateResponse } from "./tools.js";
+import { logger } from "./logger.js";
 
 /**
  * Resolve a Model object from provider + model ID.
@@ -62,7 +63,7 @@ async function ensureFreshApiKey(config: Config): Promise<string> {
     return config.llmApiKey;
   }
 
-  console.log(`🔄 ${config.llmProvider} token expired, refreshing...`);
+  logger.info(`${config.llmProvider} token expired, refreshing...`);
   try {
     let creds: { access: string; refresh: string; expires: number };
 
@@ -82,10 +83,10 @@ async function ensureFreshApiKey(config: Config): Promise<string> {
       OAUTH_REFRESH_TOKEN: creds.refresh,
       OAUTH_TOKEN_EXPIRES: String(creds.expires),
     });
-    console.log(`✓ Token refreshed.`);
+    logger.info("Token refreshed successfully");
     return creds.access;
   } catch (err) {
-    console.error("✗ Token refresh failed:", err instanceof Error ? err.message : err);
+    logger.error("Token refresh failed", { error: err instanceof Error ? err.message : String(err) });
     return config.llmApiKey;
   }
 }
@@ -101,7 +102,7 @@ export async function chat(
 ): Promise<FlowMateResponse[]> {
   if (!cachedModel) {
     cachedModel = resolveModel(config);
-    console.log(`LLM: ${cachedModel.provider}/${cachedModel.id} (api: ${cachedModel.api})`);
+    logger.info(`LLM resolved: ${cachedModel.provider}/${cachedModel.id} (api: ${cachedModel.api})`);
   }
 
   const apiKey = await ensureFreshApiKey(config);

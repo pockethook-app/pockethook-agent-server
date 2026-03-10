@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import type { Provider } from "@mariozechner/pi-ai";
+import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -170,7 +171,7 @@ function getInstructions(): string {
       cachedInstructions = loadInstructions();
       cachedInstructionsMtime = mtime;
       if (cachedInstructions) {
-        console.log("Agent instructions reloaded.");
+        logger.info("Agent instructions reloaded.");
       }
     }
   } catch {
@@ -240,7 +241,7 @@ export function getSystemPrompt(agentName: string): string {
     cachedSkills = loadSkills();
     cachedSkillsMtime = currentMtime;
     if (cachedSkills) {
-      console.log(`Skills reloaded (${readdirSync(SKILLS_DIR).filter((f) => f.endsWith(".md") || f.endsWith(".txt")).length} file(s))`);
+      logger.info(`Skills reloaded (${readdirSync(SKILLS_DIR).filter((f) => f.endsWith(".md") || f.endsWith(".txt")).length} file(s))`);
     }
   }
 
@@ -252,7 +253,7 @@ export function getSystemPrompt(agentName: string): string {
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
-    console.error(`Missing required environment variable: ${name}`);
+    logger.error(`Missing required environment variable: ${name}`);
     process.exit(1);
   }
   return value;

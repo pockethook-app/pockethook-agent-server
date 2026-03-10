@@ -12,6 +12,7 @@ import { existsSync, readFileSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { listJobs } from "./jobs.js";
+import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CUSTOM_DASHBOARD_PATH = join(PROJECT_ROOT, "workspace", "dashboard", "dashboard.html");
@@ -46,7 +47,7 @@ export function getDashboardHtml(): string {
       if (mtime !== cachedCustomMtime || cachedCustomHtml === null) {
         cachedCustomHtml = readFileSync(CUSTOM_DASHBOARD_PATH, "utf-8");
         cachedCustomMtime = mtime;
-        console.log("Custom dashboard.html reloaded.");
+        logger.info("Custom dashboard.html reloaded");
       }
       return cachedCustomHtml;
     }
@@ -56,7 +57,7 @@ export function getDashboardHtml(): string {
   if (cachedCustomHtml !== null && !existsSync(CUSTOM_DASHBOARD_PATH)) {
     cachedCustomHtml = null;
     cachedCustomMtime = 0;
-    console.log("Custom dashboard.html removed, using default.");
+    logger.info("Custom dashboard.html removed, using default");
   }
 
   return DEFAULT_DASHBOARD_HTML;
