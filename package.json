@@ -1,0 +1,24 @@
+{
+  "name": "flowmate-agent-server",
+  "version": "0.1.0",
+  "description": "FlowMate agent server with LLM integration via pi-ai",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "setup": "bun run src/setup.ts",
+    "switch": "bun run src/setup.ts --switch",
+    "refresh": "bun run src/setup.ts --refresh",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@flow-mate/sdk": "^0.1.0",
+    "@mariozechner/pi-agent-core": "^0.57.1",
+    "@mariozechner/pi-ai": "^0.57.1",
+    "open": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}
