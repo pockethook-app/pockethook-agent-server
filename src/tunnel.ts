@@ -12,6 +12,30 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 
 const PORT = Number(process.env.PORT) || 3000;
+const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 0; // 0 = auto-detect free port
+
+/** Check if a port is in use */
+function isPortInUse(port: number): boolean {
+  try {
+    execSync(`lsof -i :${port} -sTCP:LISTEN`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Find a free HTTPS port starting from 443, then 8443, 9443, etc. */
+function findFreeHttpsPort(): number {
+  const candidates = [443, 8443, 9443, 10443, 3443];
+  for (const port of candidates) {
+    if (!isPortInUse(port)) return port;
+  }
+  // Fallback: try random high ports
+  for (let port = 4430; port < 4440; port++) {
+    if (!isPortInUse(port)) return port;
+  }
+  return 8443; // Last resort
+}
 
 interface TunnelProvider {
   name: string;
@@ -58,23 +82,22 @@ async function startTailscale(port: number): Promise<void> {
     process.exit(1);
   }
 
+  const httpsPort = HTTPS_PORT || findFreeHttpsPort();
+
   p.log.info(`Tailscale hostname: ${pc.cyan(hostname)}`);
+  p.log.info(`HTTPS port: ${pc.cyan(String(httpsPort))}${httpsPort === 443 ? "" : pc.dim(` (443 in use)`)}`);
   p.log.step("Starting Tailscale HTTPS serve...");
 
-  // First, reset any existing serve config for this port
-  try {
-    execSync(`tailscale serve reset`, { stdio: "ignore" });
-  } catch {}
-
-  // Set up HTTPS serve
-  const child = spawn("tailscale", ["serve", "--https", "443", `http://localhost:${port}`], {
+  // Set up HTTPS serve on the chosen port (does NOT reset existing serves)
+  const child = spawn("tailscale", ["serve", "--https", String(httpsPort), `http://localhost:${port}`], {
     stdio: "inherit",
   });
 
   // Give it a moment to start
   await new Promise((res) => setTimeout(res, 2000));
 
-  const url = `https://${hostname}`;
+  const portSuffix = httpsPort === 443 ? "" : `:${httpsPort}`;
+  const url = `https://${hostname}${portSuffix}`;
 
   console.log("");
   p.log.success(pc.bold("Tunnel ready!"));
@@ -88,6 +111,15 @@ async function startTailscale(port: number): Promise<void> {
   console.log(`  ${pc.dim("Copy the Jobs polling URL to FlowMate Settings → Polling URL")}`);
   console.log("");
   console.log(`  ${pc.dim("Press Ctrl+C to stop the tunnel.")}`);
+
+  const cleanup = () => {
+    try {
+      execSync(`tailscale serve --https ${httpsPort} off`, { stdio: "ignore" });
+    } catch {}
+  };
+
+  process.on("SIGINT", () => { cleanup(); process.exit(0); });
+  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 
   child.on("close", (code) => {
     if (code !== 0) {
