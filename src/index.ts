@@ -30,11 +30,11 @@ if (permissions.filesystem.blockedPaths.length > 0) {
 // Initialize jobs system and scheduler
 initJobs();
 
-// Chat function for prompt-type jobs (agent processes the prompt)
+// Chat function for prompt-type jobs — stores full FlowMate response as JSON
 const jobChatFn = async (prompt: string): Promise<string> => {
   const jobMessages = [{ role: "user" as const, content: prompt, timestamp: Date.now() }];
-  const responses = await chat(config, getSystemPrompt(config.agentName), jobMessages, tools);
-  return responses.map((r) => r.msg).join("\n");
+  const result = await chat(config, getSystemPrompt(config.agentName), jobMessages, tools);
+  return JSON.stringify(result);
 };
 
 startScheduler(config.workingDir, jobChatFn);
@@ -86,23 +86,37 @@ Bun.serve({
     // Direct delivery: if fetchPendingTasks and there are completed jobs, respond immediately without LLM
     const undelivered = getUndeliveredResults();
     if (undelivered.length > 0 && chatInput.toLowerCase().includes("fetchpendingtask")) {
-      const jobResponses = undelivered.map((j) => {
-        const status = j.status === "completed" ? "✅" : "❌";
-        const output = j.result || j.error || "No output";
-        return {
-          msg: `${status} Job #${j.id} "${j.name}"\n${output}`,
-          shortcut: undefined as string | undefined,
-          data: undefined as Record<string, unknown> | undefined,
-          url: undefined as string | undefined,
-        };
-      });
+      const jobResponses: { msg: string; shortcut?: string; data?: Record<string, unknown>; url?: string }[] = [];
+
+      for (const j of undelivered) {
+        if (j.status === "completed" && j.result) {
+          // Try to parse as FlowMate response JSON (from prompt-type jobs)
+          try {
+            const parsed = JSON.parse(j.result);
+            if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].msg) {
+              for (const step of parsed) {
+                jobResponses.push({
+                  msg: step.msg,
+                  shortcut: step.shortcut,
+                  data: step.data,
+                  url: step.url,
+                });
+              }
+              continue;
+            }
+          } catch {
+            // Not JSON — treat as plain text
+          }
+          jobResponses.push({ msg: `✅ Job #${j.id} "${j.name}"\n${j.result}` });
+        } else {
+          jobResponses.push({ msg: `❌ Job #${j.id} "${j.name}"\n${j.error || "No output"}` });
+        }
+      }
 
       markDelivered(undelivered.map((j) => j.id));
       console.log(`[${sessionId.slice(0, 8)}] Delivered ${undelivered.length} job result(s) directly (no LLM)`);
 
-      return toResponse(
-        responses(jobResponses.map((r) => ({ msg: r.msg }))),
-      );
+      return toResponse(responses(jobResponses));
     }
 
     addUserMessage(sessionId, chatInput);
