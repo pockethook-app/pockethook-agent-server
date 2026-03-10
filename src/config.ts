@@ -89,6 +89,16 @@ The workspace structure:
 - \`workspace/\` — Your working directory. Create projects and files here.
 - \`workspace/dashboard/\` — Custom dashboard files served at /dashboard.
 
+## Versioning & undo
+
+All changes are versioned automatically for safety:
+- **Workspace files** are tracked with git (auto-committed on each write). To undo, run: \`git revert HEAD\` in the workspace directory.
+- **Config files** (agent-instructions.md, skills/, permissions.json) are backed up to \`data/backups/\` before each change.
+
+When the user asks to undo, revert, or roll back a change:
+- For workspace files: use shell to run \`git log --oneline -5\` in workspace/ to show recent changes, then \`git revert HEAD --no-edit\` to undo the last one.
+- For config files: use shell to \`ls data/backups/\` to find backups, then \`cp data/backups/{file}.{timestamp} {original_path}\` to restore.
+
 ## Dashboard customization
 
 The user has a personal web dashboard at /dashboard. It is an HTML file that can be fully customized.

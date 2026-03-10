@@ -242,6 +242,17 @@ Granular tool permissions are stored in `permissions.json` (configure via `bun r
 - **Blocked filesystem paths** — e.g., `.env`, `.git`
 - **Blocked file patterns** — Globs like `*.key`, `*.pem`
 
+## Versioning
+
+All user data is versioned automatically for safety — no changes are ever lost:
+
+- **Workspace files** — Tracked with a local git repo inside `workspace/`. Every write by the agent creates an auto-commit. Users can undo changes by asking the agent ("undo the last change") or manually with `git revert HEAD` in `workspace/`.
+- **Config files** — `agent-instructions.md`, `skills/`, and `permissions.json` are backed up to `data/backups/` before each modification. Up to 20 versions per file are retained.
+
+Git is optional — if not installed, workspace changes are simply unversioned. Config backups always work regardless.
+
+The versioning system is invisible to the user. The agent knows how to undo and restore when asked.
+
 ## Memory
 
 SQLite with FTS5 full-text search for long-term memory (`data/memory.db`):
@@ -261,6 +272,7 @@ flowmate-agent-server/
 │   ├── dashboard.ts      # Web dashboard HTML and jobs API
 │   ├── llm.ts            # Agent execution, LLM communication
 │   ├── tools.ts          # Tool implementations (shell, read, write, ls, jobs)
+│   ├── versioning.ts     # Workspace git + config backups
 │   ├── jobs.ts           # Background job system, cron scheduler
 │   ├── permissions.ts    # Permission enforcement
 │   ├── sessions.ts       # Session management, memory context
@@ -270,7 +282,7 @@ flowmate-agent-server/
 │   ├── tunnel.ts         # HTTPS tunnel setup
 │   └── dev-tunnel.ts     # Combined dev server + tunnel
 ├── skills/               # Hot-reloadable shortcut definitions
-├── data/                 # Runtime data (SQLite, service metadata)
+├── data/                 # Runtime data (SQLite, service metadata, backups)
 ├── workspace/            # Agent's working directory
 │   └── dashboard/        # Custom dashboard files (hot-reloaded)
 ├── agent-instructions.md # Editable agent behavior (hot-reloaded)

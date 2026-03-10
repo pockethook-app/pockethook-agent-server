@@ -13,6 +13,7 @@ import { memoryStats } from "./memory.js";
 import { loadPermissions } from "./permissions.js";
 import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
 import { getDashboardHtml, getJobsJson } from "./dashboard.js";
+import { initWorkspaceGit } from "./versioning.js";
 
 const config = loadConfig();
 const permissions = loadPermissions(process.env.TOOLS);
@@ -28,8 +29,9 @@ if (permissions.filesystem.blockedPaths.length > 0) {
   console.log(`Filesystem blocked: ${permissions.filesystem.blockedPaths.join(", ")}`);
 }
 
-// Initialize jobs system and scheduler
+// Initialize jobs system and workspace versioning
 initJobs();
+initWorkspaceGit();
 
 // Chat function for prompt-type jobs — stores full FlowMate response as JSON
 const jobChatFn = async (prompt: string): Promise<string> => {

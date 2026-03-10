@@ -14,6 +14,7 @@ import type { Permissions } from "./permissions.js";
 import { checkShellPermission, checkPathPermission } from "./permissions.js";
 import { createJob, listJobs, deleteJob, updateJobEnabled } from "./jobs.js";
 import type { Job } from "./jobs.js";
+import { commitWorkspace, backupConfigFile, backupSkills, configPaths } from "./versioning.js";
 
 const MAX_OUTPUT = 50_000; // chars
 
@@ -59,6 +60,11 @@ function createShellTool(cwd: string, perms: Permissions): AgentTool<typeof shel
         child.stderr?.on("data", (d: Buffer) => { output += d.toString(); });
 
         child.on("close", (code) => {
+          // Auto-commit workspace changes after shell commands
+          if (code === 0) {
+            commitWorkspace(`auto: shell \`${params.command.slice(0, 60)}\``);
+          }
+
           const prefix = code === 0 ? "" : `[exit code: ${code}]\n`;
           res({
             content: [{ type: "text", text: truncate(prefix + output) }],
@@ -136,7 +142,22 @@ function createWriteTool(cwd: string, perms: Permissions): AgentTool<typeof writ
       if (!check.allowed) return denied(check.reason!);
 
       try {
+        // Backup config files before overwriting
+        if (filePath === configPaths.agentInstructions || filePath === configPaths.permissions) {
+          backupConfigFile(filePath);
+        }
+        if (filePath.startsWith(configPaths.skillsDir)) {
+          backupSkills();
+        }
+
         writeFileSync(filePath, params.content, "utf-8");
+
+        // Auto-commit workspace changes
+        if (filePath.startsWith(resolve(cwd))) {
+          const relPath = relative(cwd, filePath);
+          commitWorkspace(`auto: update ${relPath}`);
+        }
+
         return {
           content: [{ type: "text", text: `Written ${params.content.length} chars to ${filePath}` }],
           details: { path: filePath, size: params.content.length },
