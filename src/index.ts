@@ -14,6 +14,7 @@ import { loadPermissions } from "./permissions.js";
 import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
 import { getDashboardHtml, getJobsJson } from "./dashboard.js";
 import { initWorkspaceGit } from "./versioning.js";
+import { checkRateLimit, configureRateLimit } from "./rate-limit.js";
 
 const config = loadConfig();
 const permissions = loadPermissions(process.env.TOOLS);
@@ -97,6 +98,21 @@ Bun.serve({
       return new Response("Unauthorized", { status: 401 });
     }
 
+    // Rate limiting
+    const rateCheck = checkRateLimit(token);
+    if (!rateCheck.allowed) {
+      return new Response("Too Many Requests", {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil((rateCheck.retryAfterMs ?? 60_000) / 1000)) },
+      });
+    }
+
+    // Request size limit (1MB)
+    const contentLength = req.headers.get("Content-Length");
+    if (contentLength && parseInt(contentLength, 10) > 1_048_576) {
+      return new Response("Payload Too Large", { status: 413 });
+    }
+
     let sessionId: string;
     let chatInput: string;
     try {
@@ -106,6 +122,11 @@ Bun.serve({
     } catch (err) {
       const message = err instanceof Error ? err.message : "Bad Request";
       return new Response(message, { status: 400 });
+    }
+
+    // Message length limit (10,000 chars — matches FlowMate app limit)
+    if (chatInput.length > 10_000) {
+      return new Response("Message too long (max 10,000 characters)", { status: 413 });
     }
 
     console.log(`[${new Date().toISOString()}] ${sessionId.slice(0, 8)}: ${chatInput.slice(0, 100)}`);
