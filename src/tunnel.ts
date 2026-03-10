@@ -88,13 +88,14 @@ async function startTailscale(port: number): Promise<void> {
   p.log.info(`HTTPS port: ${pc.cyan(String(httpsPort))}${httpsPort === 443 ? "" : pc.dim(` (443 in use)`)}`);
   p.log.step("Starting Tailscale HTTPS serve...");
 
-  // Set up HTTPS serve on the chosen port (does NOT reset existing serves)
-  const child = spawn("tailscale", ["serve", "--https", String(httpsPort), `http://localhost:${port}`], {
-    stdio: "inherit",
-  });
-
-  // Give it a moment to start
-  await new Promise((res) => setTimeout(res, 2000));
+  // tailscale serve is not a daemon — it configures the rule and exits.
+  // So we run it synchronously, then keep the script alive for cleanup on Ctrl+C.
+  try {
+    execSync(`tailscale serve --https ${httpsPort} http://localhost:${port}`, { stdio: "inherit" });
+  } catch (err) {
+    p.log.error(`Failed to configure Tailscale serve: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
 
   const portSuffix = httpsPort === 443 ? "" : `:${httpsPort}`;
   const url = `https://${hostname}${portSuffix}`;
@@ -110,24 +111,20 @@ async function startTailscale(port: number): Promise<void> {
   console.log(`  ${pc.dim("Copy the Health check URL to FlowMate Settings → Health Check URL")}`);
   console.log(`  ${pc.dim("Copy the Jobs polling URL to FlowMate Settings → Polling URL")}`);
   console.log("");
-  console.log(`  ${pc.dim("Press Ctrl+C to stop the tunnel.")}`);
+  console.log(`  ${pc.dim("Press Ctrl+C to stop and remove the tunnel.")}`);
 
   const cleanup = () => {
+    console.log(`\n${pc.dim("Removing Tailscale serve on port " + httpsPort + "...")}`);
     try {
       execSync(`tailscale serve --https ${httpsPort} off`, { stdio: "ignore" });
+      console.log(pc.dim("Done."));
     } catch {}
   };
 
   process.on("SIGINT", () => { cleanup(); process.exit(0); });
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 
-  child.on("close", (code) => {
-    if (code !== 0) {
-      p.log.error(`Tailscale serve exited with code ${code}`);
-    }
-  });
-
-  // Keep alive
+  // Keep the script alive so Ctrl+C can clean up
   await new Promise(() => {});
 }
 
