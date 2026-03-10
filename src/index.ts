@@ -11,6 +11,7 @@ import {
 } from "./sessions.js";
 import { memoryStats } from "./memory.js";
 import { loadPermissions } from "./permissions.js";
+import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
 
 const config = loadConfig();
 const permissions = loadPermissions(process.env.TOOLS);
@@ -25,6 +26,18 @@ if (permissions.shell.blockedCommands.length > 0) {
 if (permissions.filesystem.blockedPaths.length > 0) {
   console.log(`Filesystem blocked: ${permissions.filesystem.blockedPaths.join(", ")}`);
 }
+
+// Initialize jobs system and scheduler
+initJobs();
+
+// Chat function for prompt-type jobs (agent processes the prompt)
+const jobChatFn = async (prompt: string): Promise<string> => {
+  const jobMessages = [{ role: "user" as const, content: prompt, timestamp: Date.now() }];
+  const responses = await chat(config, getSystemPrompt(config.agentName), jobMessages, tools);
+  return responses.map((r) => r.msg).join("\n");
+};
+
+startScheduler(config.workingDir, jobChatFn);
 
 // Clean expired sessions periodically
 setInterval(() => {
@@ -42,6 +55,10 @@ Bun.serve({
 
     if (req.method === "GET" && url.pathname === "/health") {
       return new Response("true", { status: 200 });
+    }
+
+    if (req.method === "GET" && url.pathname === "/jobs") {
+      return new Response(hasUndeliveredResults() ? "true" : "false", { status: 200 });
     }
 
     if (req.method !== "POST" || url.pathname !== "/") {
@@ -65,6 +82,19 @@ Bun.serve({
     }
 
     console.log(`[${new Date().toISOString()}] ${sessionId.slice(0, 8)}: ${chatInput.slice(0, 100)}`);
+
+    // Inject completed job results when polling triggers a fetch
+    const undelivered = getUndeliveredResults();
+    if (undelivered.length > 0 && chatInput.toLowerCase().includes("fetchpendingtask")) {
+      const jobContext = undelivered.map((j) => {
+        const status = j.status === "completed" ? "completed" : "failed";
+        const output = j.result || j.error || "No output";
+        return `[Job #${j.id} "${j.name}" ${status} at ${new Date(j.completed_at!).toISOString()}]\n${output}`;
+      }).join("\n\n");
+
+      chatInput += `\n\n--- Completed Background Jobs ---\n${jobContext}`;
+      markDelivered(undelivered.map((j) => j.id));
+    }
 
     addUserMessage(sessionId, chatInput);
 

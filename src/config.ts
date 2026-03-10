@@ -98,6 +98,41 @@ Keep responses concise. You can use Markdown in msg (bold, code blocks, lists, e
 
 let BASE_SYSTEM_PROMPT: string | null = null;
 
+// ── Agent instructions (hot-reloaded from agent-instructions.md) ────────
+
+const INSTRUCTIONS_PATH = join(PROJECT_ROOT, "agent-instructions.md");
+let cachedInstructions: string = "";
+let cachedInstructionsMtime: number = 0;
+
+function loadInstructions(): string {
+  if (!existsSync(INSTRUCTIONS_PATH)) return "";
+  try {
+    const content = readFileSync(INSTRUCTIONS_PATH, "utf-8").trim();
+    return content ? "\n\n" + content : "";
+  } catch {
+    return "";
+  }
+}
+
+function getInstructions(): string {
+  try {
+    const mtime = statSync(INSTRUCTIONS_PATH).mtimeMs;
+    if (mtime !== cachedInstructionsMtime) {
+      cachedInstructions = loadInstructions();
+      cachedInstructionsMtime = mtime;
+      if (cachedInstructions) {
+        console.log("Agent instructions reloaded.");
+      }
+    }
+  } catch {
+    if (cachedInstructions) {
+      cachedInstructions = "";
+      cachedInstructionsMtime = 0;
+    }
+  }
+  return cachedInstructions;
+}
+
 // ── Skills (hot-reloaded from skills/ directory) ────────────────────────
 
 const SKILLS_DIR = join(PROJECT_ROOT, "skills");
@@ -160,7 +195,7 @@ export function getSystemPrompt(agentName: string): string {
     }
   }
 
-  return BASE_SYSTEM_PROMPT + cachedSkills;
+  return BASE_SYSTEM_PROMPT + getInstructions() + cachedSkills;
 }
 
 // ── Config ──────────────────────────────────────────────────────────────

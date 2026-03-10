@@ -12,6 +12,8 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { Permissions } from "./permissions.js";
 import { checkShellPermission, checkPathPermission } from "./permissions.js";
+import { createJob, listJobs, deleteJob, updateJobEnabled, parseInterval } from "./jobs.js";
+import type { Job } from "./jobs.js";
 
 const MAX_OUTPUT = 50_000; // chars
 
@@ -239,9 +241,109 @@ export function createRespondTool(
   };
 }
 
+// ── Job tools ────────────────────────────────────────────────────────────
+
+const createJobSchema = Type.Object({
+  name: Type.String({ description: "Human-readable job name" }),
+  type: Type.Union([Type.Literal("once"), Type.Literal("cron")], {
+    description: "once = run once, cron = repeat on schedule",
+  }),
+  schedule: Type.Optional(Type.String({ description: "Interval for cron jobs: '30s', '5m', '1h', '1d'. Required for cron type." })),
+  prompt: Type.String({ description: "What to execute: shell command or agent prompt" }),
+  execution_type: Type.Optional(Type.Union([Type.Literal("shell"), Type.Literal("prompt")], {
+    description: "shell = run as bash command (default), prompt = send to AI agent",
+  })),
+  delay: Type.Optional(Type.String({ description: "Delay before first run: '5m', '1h', etc. Default: immediate" })),
+});
+
+function createCreateJobTool(): AgentTool<typeof createJobSchema> {
+  return {
+    name: "create_job",
+    label: "Create background job",
+    description: "Create a background job that runs on a schedule (cron) or once. Shell jobs run bash commands; prompt jobs are processed by the AI agent.",
+    parameters: createJobSchema,
+    async execute(_id, params) {
+      try {
+        const job = createJob({
+          name: params.name,
+          type: params.type,
+          schedule: params.schedule,
+          prompt: params.prompt,
+          execution_type: params.execution_type ?? "shell",
+          delay: params.delay,
+        });
+        const nextRun = new Date(job.next_run_at).toISOString();
+        return {
+          content: [{ type: "text", text: `Job #${job.id} "${job.name}" created (${job.type}, ${job.execution_type}). Next run: ${nextRun}` }],
+          details: { jobId: job.id },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error creating job: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
+const listJobsSchema = Type.Object({});
+
+function createListJobsTool(): AgentTool<typeof listJobsSchema> {
+  return {
+    name: "list_jobs",
+    label: "List background jobs",
+    description: "List all background jobs with their status, schedule, and last result.",
+    parameters: listJobsSchema,
+    async execute() {
+      const jobs = listJobs();
+      if (jobs.length === 0) {
+        return {
+          content: [{ type: "text", text: "No jobs found." }],
+          details: { count: 0 },
+        };
+      }
+
+      const lines = jobs.map((j: Job) => {
+        const status = j.enabled ? j.status : "disabled";
+        const schedule = j.schedule ? ` every ${j.schedule}` : "";
+        const nextRun = j.status === "pending" ? ` next: ${new Date(j.next_run_at).toISOString()}` : "";
+        const lastResult = j.result ? ` result: ${j.result.slice(0, 100)}` : "";
+        const lastError = j.error ? ` error: ${j.error.slice(0, 100)}` : "";
+        return `#${j.id} "${j.name}" [${j.type}${schedule}] (${status})${nextRun}${lastResult}${lastError}`;
+      });
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { count: jobs.length },
+      };
+    },
+  };
+}
+
+const deleteJobSchema = Type.Object({
+  id: Type.Number({ description: "Job ID to delete" }),
+});
+
+function createDeleteJobTool(): AgentTool<typeof deleteJobSchema> {
+  return {
+    name: "delete_job",
+    label: "Delete background job",
+    description: "Delete a background job by ID.",
+    parameters: deleteJobSchema,
+    async execute(_id, params) {
+      const deleted = deleteJob(params.id);
+      return {
+        content: [{ type: "text", text: deleted ? `Job #${params.id} deleted.` : `Job #${params.id} not found.` }],
+        details: { deleted },
+      };
+    },
+  };
+}
+
 // ── Tool factory ────────────────────────────────────────────────────────
 
-type ToolName = "shell" | "read" | "write" | "ls";
+type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job";
 
 export function createTools(cwd: string, perms: Permissions): AgentTool<any>[] {
   const factories: Record<ToolName, () => AgentTool<any>> = {
@@ -249,6 +351,9 @@ export function createTools(cwd: string, perms: Permissions): AgentTool<any>[] {
     read: () => createReadTool(cwd, perms),
     write: () => createWriteTool(cwd, perms),
     ls: () => createLsTool(cwd, perms),
+    create_job: () => createCreateJobTool(),
+    list_jobs: () => createListJobsTool(),
+    delete_job: () => createDeleteJobTool(),
   };
 
   const tools: AgentTool<any>[] = [];
