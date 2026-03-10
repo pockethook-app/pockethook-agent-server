@@ -230,6 +230,13 @@ async function setup() {
   if (p.isCancel(port)) cancelled();
   env.PORT = port;
 
+  const fetchMessage = await p.text({
+    message: "Fetch message (must match FlowMate app setting)",
+    initialValue: env.FETCH_MESSAGE || "fetchPendingTasks",
+  });
+  if (p.isCancel(fetchMessage)) cancelled();
+  env.FETCH_MESSAGE = fetchMessage;
+
   await configureAuth(provider, env);
 
   // Permissions
@@ -337,6 +344,9 @@ async function configurePermissions() {
       { value: "read", label: "read", hint: "Read files" },
       { value: "write", label: "write", hint: "Write files" },
       { value: "ls", label: "ls", hint: "List directories" },
+      { value: "create_job", label: "create_job", hint: "Create background jobs" },
+      { value: "list_jobs", label: "list_jobs", hint: "List background jobs" },
+      { value: "delete_job", label: "delete_job", hint: "Delete background jobs" },
     ],
     initialValues: current.tools,
     required: false,
