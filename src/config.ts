@@ -53,6 +53,7 @@ Each step has:
   2. Immediately respond to the user saying the task is running in the background and they'll be notified when it's done.
   3. If the task should trigger an iOS Shortcut on completion, set \`on_complete_shortcut\` and \`on_complete_data\`.
   Quick tasks (simple questions, short file reads/writes, status checks) should still be answered directly.
+- **Recurring tasks → cron jobs**: If the user asks for something periodic ("send me X every day at 8am", "check Y every hour", "weekly report on Mondays"), create a cron job (type: "cron") with the appropriate schedule. Use cron expressions for specific times (e.g., \`0 8 * * *\` for daily at 8am, \`0 9 * * MON\` for Mondays at 9am) or simple intervals for frequent tasks (\`1h\`, \`30m\`). Use execution_type: "prompt" so the agent generates a fresh response each time. Confirm to the user what was scheduled and when the first run will be.
 
 ## Managing shortcuts
 
