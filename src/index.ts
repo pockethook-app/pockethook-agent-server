@@ -58,7 +58,9 @@ Bun.serve({
     }
 
     if (req.method === "GET" && url.pathname === "/jobs") {
-      return new Response(hasUndeliveredResults() ? "true" : "false", { status: 200 });
+      const pending = hasUndeliveredResults();
+      console.log(`[${new Date().toISOString()}] GET /jobs → ${pending}`);
+      return new Response(pending ? "true" : "false", { status: 200 });
     }
 
     if (req.method !== "POST" || url.pathname !== "/") {
@@ -131,8 +133,9 @@ Bun.serve({
         }
       }
 
-      markDelivered(undelivered.map((j) => j.id));
-      console.log(`[${sessionId.slice(0, 8)}] Delivered ${undelivered.length} job result(s) directly (no LLM)`);
+      const ids = undelivered.map((j) => j.id);
+      markDelivered(ids);
+      console.log(`[${sessionId.slice(0, 8)}] Delivered ${undelivered.length} job result(s) directly (no LLM) — marked delivered: [${ids.join(", ")}]`);
 
       return toResponse(responses(jobResponses));
     }
