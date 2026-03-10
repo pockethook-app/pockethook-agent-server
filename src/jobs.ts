@@ -91,9 +91,13 @@ function getDb(): Database {
   // Migration: add columns if upgrading from older schema
   try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_shortcut TEXT"); } catch {}
   try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_data TEXT"); } catch {}
+  try { db.run("ALTER TABLE jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0"); } catch {}
 
   return db;
 }
+
+const MAX_RETRIES = 2;
+const RETRY_DELAYS = [60_000, 300_000]; // 1 min, 5 min
 
 // ── Schedule parsing ─────────────────────────────────────────────────────
 
@@ -496,6 +500,16 @@ async function schedulerTick(): Promise<void> {
             ["Could not calculate next run time from schedule: " + job.schedule, completedAt, job.id],
           );
         }
+      } else if (!ok && job.type === "once" && (job as any).retries < MAX_RETRIES) {
+        // Retry failed "once" jobs with exponential backoff
+        const retryCount = ((job as any).retries ?? 0) + 1;
+        const delay = RETRY_DELAYS[retryCount - 1] ?? RETRY_DELAYS[RETRY_DELAYS.length - 1]!;
+        const nextRetry = completedAt + delay;
+        logger.info(`Job #${job.id} scheduling retry ${retryCount}/${MAX_RETRIES}`, { delayMs: delay });
+        d.run(
+          "UPDATE jobs SET status = 'pending', error = ?, completed_at = ?, next_run_at = ?, retries = ? WHERE id = ?",
+          [output || null, completedAt, nextRetry, retryCount, job.id],
+        );
       } else {
         d.run(
           `UPDATE jobs SET status = '${ok ? "completed" : "failed"}', ${resultField} = ?, completed_at = ?, delivered = 0 WHERE id = ?`,
