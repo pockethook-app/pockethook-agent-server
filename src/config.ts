@@ -17,6 +17,9 @@ export interface Config {
   workingDir: string;
   fetchMessage: string;
   dashboardEnabled: boolean;
+  searchProvider?: "serper" | "searxng";
+  searchApiKey?: string;
+  searchUrl?: string;
   oauthRefreshToken?: string;
   oauthTokenExpires?: number;
 }
@@ -261,6 +264,9 @@ export function loadConfig(): Config {
     workingDir: process.env.WORKING_DIR || join(PROJECT_ROOT, "workspace"),
     fetchMessage: (process.env.FETCH_MESSAGE || "fetchPendingTasks").toLowerCase(),
     dashboardEnabled: process.env.DASHBOARD !== "false",
+    searchProvider: process.env.SEARCH_PROVIDER as "serper" | "searxng" | undefined,
+    searchApiKey: process.env.SEARCH_API_KEY,
+    searchUrl: process.env.SEARCH_URL,
     oauthRefreshToken: process.env.OAUTH_REFRESH_TOKEN,
     oauthTokenExpires: process.env.OAUTH_TOKEN_EXPIRES ? Number(process.env.OAUTH_TOKEN_EXPIRES) : undefined,
   };

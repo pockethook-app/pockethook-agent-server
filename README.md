@@ -8,7 +8,7 @@ The server receives messages from FlowMate, processes them through an LLM with t
 
 - **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter
 - **OAuth authentication** — GitHub Copilot and OpenAI Codex via device code / browser flow
-- **Agent tools** — Shell, file read/write, directory listing, background jobs
+- **Agent tools** — Shell, file read/write, directory listing, background jobs, web search, web scraping
 - **Background jobs** — Schedule one-time or recurring tasks with cron expressions
 - **Hot-reloadable skills** — Define shortcuts as `.md` files in `skills/`, no restart needed
 - **Self-managing skills** — The agent can create, edit, and delete skill definitions
@@ -77,6 +77,9 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `WORKING_DIR` | `workspace/` | Agent's restricted working directory |
 | `FETCH_MESSAGE` | `fetchPendingTasks` | Message that triggers job result delivery |
 | `DASHBOARD` | `true` | Enable web dashboard (`/dashboard` route) |
+| `SEARCH_PROVIDER` | — | Search provider: `serper` or `searxng` |
+| `SEARCH_API_KEY` | — | Serper.dev API key (when using `serper`) |
+| `SEARCH_URL` | — | SearXNG instance URL (when using `searxng`) |
 | `TOOLS` | `all` | Enabled tools (see Permissions) |
 
 ### Supported providers
@@ -231,11 +234,16 @@ Completed results are delivered **instantly without LLM processing** — stored 
 
 The agent has three job management tools: `create_job`, `list_jobs`, `delete_job`.
 
+### Web tools
+
+- **`web_search`** — Search the web via Serper.dev or SearXNG. Returns titles, snippets, and URLs.
+- **`web_fetch`** — Fetch any URL and extract clean readable content (via [Jina Reader](https://jina.ai/reader/)). Used to read full articles, product pages, reviews, etc.
+
 ## Permissions
 
 Granular tool permissions are stored in `permissions.json` (configure via `bun run permissions` or `bun run setup`):
 
-- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_job`, `list_jobs`, `delete_job`
+- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`
 - **Working directory boundary** — Prevents the agent from escaping `WORKING_DIR`
 - **Blocked shell commands** — e.g., `sudo`, `rm -rf /`, `shutdown`
 - **Blocked shell patterns** — Regex patterns like `curl.*\|.*sh`

@@ -15,6 +15,7 @@ import { checkShellPermission, checkPathPermission } from "./permissions.js";
 import { createJob, listJobs, deleteJob, updateJobEnabled } from "./jobs.js";
 import type { Job } from "./jobs.js";
 import { commitWorkspace, backupConfigFile, backupSkills, configPaths } from "./versioning.js";
+import type { Config } from "./config.js";
 
 const MAX_OUTPUT = 50_000; // chars
 
@@ -366,11 +367,143 @@ function createDeleteJobTool(): AgentTool<typeof deleteJobSchema> {
   };
 }
 
+// ── Web search tool ──────────────────────────────────────────────────
+
+const webSearchSchema = Type.Object({
+  query: Type.String({ description: "Search query" }),
+  num_results: Type.Optional(Type.Number({ description: "Number of results to return (default: 5, max: 10)" })),
+});
+
+function createWebSearchTool(config: Config): AgentTool<typeof webSearchSchema> {
+  return {
+    name: "web_search",
+    label: "Search the web",
+    description: "Search the web and return results with titles, snippets, and URLs. Use this to find information, products, reviews, news, etc.",
+    parameters: webSearchSchema,
+    async execute(_id, params) {
+      const num = Math.min(params.num_results ?? 5, 10);
+
+      try {
+        let results: { title: string; snippet: string; url: string }[];
+
+        if (config.searchProvider === "searxng" && config.searchUrl) {
+          // SearXNG
+          const searchUrl = new URL("/search", config.searchUrl);
+          searchUrl.searchParams.set("q", params.query);
+          searchUrl.searchParams.set("format", "json");
+          searchUrl.searchParams.set("categories", "general");
+
+          const res = await fetch(searchUrl.toString());
+          if (!res.ok) throw new Error(`SearXNG returned ${res.status}`);
+          const data = await res.json() as { results: { title: string; content: string; url: string }[] };
+
+          results = (data.results || []).slice(0, num).map((r) => ({
+            title: r.title,
+            snippet: r.content,
+            url: r.url,
+          }));
+        } else if (config.searchApiKey) {
+          // Serper.dev
+          const res = await fetch("https://google.serper.dev/search", {
+            method: "POST",
+            headers: {
+              "X-API-KEY": config.searchApiKey,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ q: params.query, num }),
+          });
+          if (!res.ok) throw new Error(`Serper returned ${res.status}`);
+          const data = await res.json() as { organic: { title: string; snippet: string; link: string }[] };
+
+          results = (data.organic || []).slice(0, num).map((r) => ({
+            title: r.title,
+            snippet: r.snippet,
+            url: r.link,
+          }));
+        } else {
+          return {
+            content: [{ type: "text", text: "Web search not configured. Set SEARCH_API_KEY (Serper) or SEARCH_PROVIDER=searxng + SEARCH_URL in .env." }],
+            details: { error: "not_configured" },
+          };
+        }
+
+        if (results.length === 0) {
+          return {
+            content: [{ type: "text", text: `No results found for: ${params.query}` }],
+            details: { count: 0 },
+          };
+        }
+
+        const formatted = results.map((r, i) =>
+          `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.url}`
+        ).join("\n\n");
+
+        return {
+          content: [{ type: "text", text: formatted }],
+          details: { count: results.length },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Search error: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
+// ── Web fetch tool ──────────────────────────────────────────────────
+
+const webFetchSchema = Type.Object({
+  url: Type.String({ description: "URL to fetch and extract content from" }),
+});
+
+function createWebFetchTool(): AgentTool<typeof webFetchSchema> {
+  return {
+    name: "web_fetch",
+    label: "Fetch web page content",
+    description: "Fetch a web page and extract its main content as clean readable text. Use this after web_search to read full articles, product pages, reviews, etc.",
+    parameters: webFetchSchema,
+    async execute(_id, params) {
+      try {
+        // Use Jina Reader to get clean markdown content
+        const jinaUrl = `https://r.jina.ai/${params.url}`;
+        const res = await fetch(jinaUrl, {
+          headers: {
+            "Accept": "text/markdown",
+          },
+        });
+
+        if (!res.ok) {
+          throw new Error(`Jina Reader returned ${res.status}`);
+        }
+
+        let content = await res.text();
+
+        // Truncate if too long
+        if (content.length > MAX_OUTPUT) {
+          content = content.slice(0, MAX_OUTPUT) + `\n\n... [truncated, ${content.length} total chars]`;
+        }
+
+        return {
+          content: [{ type: "text", text: content }],
+          details: { url: params.url, size: content.length },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Fetch error for ${params.url}: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
 // ── Tool factory ────────────────────────────────────────────────────────
 
-type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job";
+type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch";
 
-export function createTools(cwd: string, perms: Permissions): AgentTool<any>[] {
+export function createTools(cwd: string, perms: Permissions, config?: Config): AgentTool<any>[] {
   const factories: Record<ToolName, () => AgentTool<any>> = {
     shell: () => createShellTool(cwd, perms),
     read: () => createReadTool(cwd, perms),
@@ -379,6 +512,8 @@ export function createTools(cwd: string, perms: Permissions): AgentTool<any>[] {
     create_job: () => createCreateJobTool(),
     list_jobs: () => createListJobsTool(),
     delete_job: () => createDeleteJobTool(),
+    web_search: () => createWebSearchTool(config!),
+    web_fetch: () => createWebFetchTool(),
   };
 
   const tools: AgentTool<any>[] = [];

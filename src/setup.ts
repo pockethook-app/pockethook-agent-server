@@ -248,6 +248,48 @@ async function setup() {
     delete env.DASHBOARD; // defaults to enabled when absent
   }
 
+  // Web search
+  const enableSearch = await p.confirm({
+    message: "Enable web search? (requires Serper API key or SearXNG instance)",
+    initialValue: !!env.SEARCH_API_KEY || !!env.SEARCH_URL,
+  });
+  if (p.isCancel(enableSearch)) cancelled();
+
+  if (enableSearch) {
+    const searchProvider = await p.select({
+      message: "Search provider",
+      options: [
+        { value: "serper", label: "Serper.dev (Google results)", hint: "API key required, free tier: 2,500/month" },
+        { value: "searxng", label: "SearXNG (self-hosted)", hint: "No API key needed" },
+      ],
+      initialValue: env.SEARCH_PROVIDER || "serper",
+    });
+    if (p.isCancel(searchProvider)) cancelled();
+    env.SEARCH_PROVIDER = searchProvider;
+
+    if (searchProvider === "serper") {
+      const apiKey = await p.password({
+        message: "Serper API key (serper.dev)",
+      });
+      if (p.isCancel(apiKey)) cancelled();
+      env.SEARCH_API_KEY = apiKey;
+      delete env.SEARCH_URL;
+    } else {
+      const searchUrl = await p.text({
+        message: "SearXNG instance URL",
+        placeholder: "http://localhost:8080",
+        initialValue: env.SEARCH_URL || "http://localhost:8080",
+      });
+      if (p.isCancel(searchUrl)) cancelled();
+      env.SEARCH_URL = searchUrl;
+      delete env.SEARCH_API_KEY;
+    }
+  } else {
+    delete env.SEARCH_PROVIDER;
+    delete env.SEARCH_API_KEY;
+    delete env.SEARCH_URL;
+  }
+
   await configureAuth(provider, env);
 
   // Permissions
@@ -358,6 +400,8 @@ async function configurePermissions() {
       { value: "create_job", label: "create_job", hint: "Create background jobs" },
       { value: "list_jobs", label: "list_jobs", hint: "List background jobs" },
       { value: "delete_job", label: "delete_job", hint: "Delete background jobs" },
+      { value: "web_search", label: "web_search", hint: "Search the web" },
+      { value: "web_fetch", label: "web_fetch", hint: "Fetch and read web pages" },
     ],
     initialValues: current.tools,
     required: false,

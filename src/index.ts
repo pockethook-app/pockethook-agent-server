@@ -17,7 +17,7 @@ import { initWorkspaceGit } from "./versioning.js";
 
 const config = loadConfig();
 const permissions = loadPermissions(process.env.TOOLS);
-const tools = createTools(config.workingDir, permissions);
+const tools = createTools(config.workingDir, permissions, config);
 
 console.log(`Tools: [${permissions.tools.join(", ")}]`);
 console.log(`Working dir: ${config.workingDir}`);

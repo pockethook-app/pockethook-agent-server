@@ -34,7 +34,7 @@ export interface Permissions {
 // ── Defaults ─────────────────────────────────────────────────────────────
 
 export const DEFAULT_PERMISSIONS: Permissions = {
-  tools: ["shell", "read", "write", "ls", "create_job", "list_jobs", "delete_job"],
+  tools: ["shell", "read", "write", "ls", "create_job", "list_jobs", "delete_job", "web_search", "web_fetch"],
   shell: {
     blockedCommands: [
       "rm -rf /",
