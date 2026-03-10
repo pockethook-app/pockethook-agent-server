@@ -254,6 +254,8 @@ const createJobSchema = Type.Object({
     description: "shell = run as bash command (default), prompt = send to AI agent",
   })),
   delay: Type.Optional(Type.String({ description: "Delay before first run: '5m', '1h', etc. Default: immediate" })),
+  on_complete_shortcut: Type.Optional(Type.String({ description: "iOS Shortcut to trigger when the job completes (exact name). The shortcut receives the job output in the 'output' field of data." })),
+  on_complete_data: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Extra data fields to pass to the shortcut on completion. The job output is automatically added as 'output'." })),
 });
 
 function createCreateJobTool(): AgentTool<typeof createJobSchema> {
@@ -271,6 +273,8 @@ function createCreateJobTool(): AgentTool<typeof createJobSchema> {
           prompt: params.prompt,
           execution_type: params.execution_type ?? "shell",
           delay: params.delay,
+          on_complete_shortcut: params.on_complete_shortcut,
+          on_complete_data: params.on_complete_data as Record<string, unknown> | undefined,
         });
         const nextRun = new Date(job.next_run_at).toISOString();
         return {

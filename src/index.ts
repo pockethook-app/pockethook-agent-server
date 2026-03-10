@@ -107,7 +107,25 @@ Bun.serve({
           } catch {
             // Not JSON — treat as plain text
           }
-          jobResponses.push({ msg: `✅ Job #${j.id} "${j.name}"\n${j.result}` });
+          // Shell job or non-JSON result — wrap with optional shortcut
+          let data: Record<string, unknown> | undefined;
+          if (j.on_complete_data) {
+            try {
+              const template = JSON.parse(j.on_complete_data);
+              // Inject output into data under "output" key
+              data = { ...template, output: j.result };
+            } catch {
+              data = { output: j.result };
+            }
+          } else if (j.on_complete_shortcut) {
+            data = { output: j.result };
+          }
+
+          jobResponses.push({
+            msg: `✅ Job #${j.id} "${j.name}"\n${j.result}`,
+            shortcut: j.on_complete_shortcut || undefined,
+            data,
+          });
         } else {
           jobResponses.push({ msg: `❌ Job #${j.id} "${j.name}"\n${j.error || "No output"}` });
         }

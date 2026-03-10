@@ -36,6 +36,8 @@ export interface Job {
   next_run_at: number;
   delivered: number;
   enabled: number;
+  on_complete_shortcut: string | null;
+  on_complete_data: string | null;
 }
 
 export interface CreateJobOptions {
@@ -45,6 +47,8 @@ export interface CreateJobOptions {
   prompt: string;
   execution_type?: "prompt" | "shell";
   delay?: string;
+  on_complete_shortcut?: string;
+  on_complete_data?: Record<string, unknown>;
 }
 
 // ── Database ─────────────────────────────────────────────────────────────
@@ -77,9 +81,15 @@ function getDb(): Database {
       completed_at INTEGER,
       next_run_at INTEGER NOT NULL,
       delivered INTEGER NOT NULL DEFAULT 0,
-      enabled INTEGER NOT NULL DEFAULT 1
+      enabled INTEGER NOT NULL DEFAULT 1,
+      on_complete_shortcut TEXT,
+      on_complete_data TEXT
     )
   `);
+
+  // Migration: add columns if upgrading from older schema
+  try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_shortcut TEXT"); } catch {}
+  try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_data TEXT"); } catch {}
 
   return db;
 }
@@ -301,10 +311,12 @@ export function createJob(opts: CreateJobOptions): Job {
   }
   const executionType = opts.execution_type ?? "shell";
 
+  const onCompleteData = opts.on_complete_data ? JSON.stringify(opts.on_complete_data) : null;
+
   const result = d.run(
-    `INSERT INTO jobs (name, type, schedule, prompt, execution_type, status, created_at, next_run_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
-    [opts.name, opts.type, opts.schedule ?? null, opts.prompt, executionType, now, nextRunAt],
+    `INSERT INTO jobs (name, type, schedule, prompt, execution_type, status, created_at, next_run_at, on_complete_shortcut, on_complete_data)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+    [opts.name, opts.type, opts.schedule ?? null, opts.prompt, executionType, now, nextRunAt, opts.on_complete_shortcut ?? null, onCompleteData],
   );
 
   return getJob(Number(result.lastInsertRowid))!;
