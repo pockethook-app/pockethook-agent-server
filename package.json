@@ -11,6 +11,7 @@
     "permissions": "bun run src/setup.ts --permissions",
     "refresh": "bun run src/setup.ts --refresh",
     "tunnel": "bun run src/tunnel.ts",
+    "dev:tunnel": "bun run src/dev-tunnel.ts",
     "test": "bun test"
   },
   "dependencies": {
