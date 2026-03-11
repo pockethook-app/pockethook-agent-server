@@ -6,6 +6,8 @@ The server receives messages from FlowMate, processes them through an LLM with t
 
 > **This is a starting point, not a finished product.** The server ships with a core set of tools (shell, files, web search, background jobs) and is designed to be extended by you. Add your own integrations — email, calendars, documents, APIs, databases, whatever fits your workflow. Write new skills, adjust the agent instructions, wire up new tools. The goal is for you to make it yours.
 
+Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and multi-provider LLM abstraction) and inspired by [OpenClaw](https://github.com/nickytonline/OpenClaw)'s self-hosted, local-first approach to personal AI assistants.
+
 ## Features
 
 - **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter
@@ -327,11 +329,6 @@ bun tsc --noEmit
 ```
 
 Tests cover permissions enforcement, job scheduling/recovery, rate limiting, and configuration loading. CI runs both on every push and pull request to `main` via GitHub Actions.
-
-## Acknowledgments
-
-- **[pi-mono](https://github.com/badlogic/pi-mono)** — The agent framework and multi-provider LLM abstraction (`pi-agent-core` and `pi-ai`) that power this server. Without their work, this project wouldn't be possible.
-- **[OpenClaw](https://github.com/nickytonline/OpenClaw)** — Inspiration for the self-hosted agent approach. OpenClaw demonstrated that a personal AI assistant running on your own devices, with local tool execution and multi-channel messaging, is a compelling model. This server adopts a similar local-first philosophy.
 
 ## License
 
