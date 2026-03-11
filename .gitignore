@@ -3,6 +3,7 @@ dist/
 data/
 .env
 *.log
+.DS_Store
 workspace/*
 !workspace/.gitkeep
 !workspace/dashboard/

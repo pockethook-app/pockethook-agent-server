@@ -174,7 +174,7 @@ During install, you can optionally configure the HTTPS tunnel (Tailscale recomme
 
 | Platform | Backend | Service location |
 |----------|---------|-----------------|
-| macOS | launchd | `~/Library/LaunchAgents/dev.alfonsomenkel.flowmate-agent-server.plist` |
+| macOS | launchd | `~/Library/LaunchAgents/com.flowmate.agent-server.plist` |
 | Linux | systemd (user) | `~/.config/systemd/user/flowmate-agent-server.service` |
 | Windows | NSSM | Windows Service Manager |
 

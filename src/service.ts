@@ -92,7 +92,7 @@ function readEnvPort(): number {
 
 // ── macOS (launchd) ──────────────────────────────────────────────────────
 
-const LAUNCHD_LABEL = "dev.alfonsomenkel.flowmate-agent-server";
+const LAUNCHD_LABEL = "com.flowmate.agent-server";
 const LAUNCHD_PLIST = join(
   process.env.HOME || "~",
   "Library",
