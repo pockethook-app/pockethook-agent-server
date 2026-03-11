@@ -4,6 +4,8 @@ AI agent server for [FlowMate](https://github.com/appflowmate/FlowMate) — conn
 
 The server receives messages from FlowMate, processes them through an LLM with tool-calling capabilities, and returns structured responses that FlowMate executes as iOS Shortcuts on the user's device.
 
+> **This is a starting point, not a finished product.** The server ships with a core set of tools (shell, files, web search, background jobs) and is designed to be extended by you. Add your own integrations — email, calendars, documents, APIs, databases, whatever fits your workflow. Write new skills, adjust the agent instructions, wire up new tools. The goal is for you to make it yours.
+
 ## Features
 
 - **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter
