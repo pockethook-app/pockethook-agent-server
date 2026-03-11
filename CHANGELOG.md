@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.0 — 2026-03-11
+
+Pre-launch hardening.
+
+### Features
+
+- Rate limiting — configurable per-token limits (`RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`)
+- Request size limit (1 MB) and message length limit (10,000 chars)
+- Structured logging with configurable level (`LOG_LEVEL`) and JSON output in production
+- API version header (`X-API-Version`) on all responses
+- Retry mechanism for failed one-time jobs (max 2 retries with exponential backoff)
+- User locale auto-detection for location-aware searches (`LOCALE_COUNTRY`, `LOCALE_CITY`, `LOCALE_TIMEZONE`)
+- GitHub Actions CI workflow (tests + type checking on push/PR to main)
+- Unit tests for permissions, jobs, rate limiting, and configuration
+
+### Fixes
+
+- Improved shell command validation with stricter pattern matching
+- Added 30s timeout to web_fetch (Jina Reader) to prevent hanging requests
+- Fixed empty catch blocks — all exceptions now logged with structured logger
+
 ## 0.1.0 — 2026-03-10
 
 Initial release.

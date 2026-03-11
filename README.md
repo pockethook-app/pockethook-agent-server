@@ -80,6 +80,12 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `SEARCH_PROVIDER` | — | Search provider: `serper` or `searxng` |
 | `SEARCH_API_KEY` | — | Serper.dev API key (when using `serper`) |
 | `SEARCH_URL` | — | SearXNG instance URL (when using `searxng`) |
+| `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error`. JSON output in production |
+| `RATE_LIMIT_MAX` | `30` | Max requests per rate limit window |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window in milliseconds |
+| `LOCALE_COUNTRY` | (auto-detected) | User country for location-aware searches |
+| `LOCALE_CITY` | (auto-detected) | User city for regional context |
+| `LOCALE_TIMEZONE` | (auto-detected) | User timezone |
 | `TOOLS` | `all` | Enabled tools (see Permissions) |
 
 ### Supported providers
@@ -116,6 +122,14 @@ Response:
 Shows a live overview of background jobs with status, schedule, and output. Auto-refreshes every 30 seconds. Disabled when `DASHBOARD=false`.
 
 Fully customizable: place a `dashboard.html` in `workspace/dashboard/` to override the built-in default. The file is hot-reloaded on change. The agent can also edit it when asked by the user — each user gets a unique, personalized dashboard.
+
+All responses include an `X-API-Version` header with the current server version.
+
+### Rate limiting
+
+All `POST` requests are rate-limited per auth token. Default: 30 requests per 60 seconds. Returns `429 Too Many Requests` with a `Retry-After` header when exceeded. Configure via `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW_MS`.
+
+Request body size is limited to 1 MB. Message length is limited to 10,000 characters.
 
 ### `GET /health` — Health check
 
@@ -282,6 +296,8 @@ flowmate-agent-server/
 │   ├── tools.ts          # Tool implementations (shell, read, write, ls, jobs)
 │   ├── versioning.ts     # Workspace git + config backups
 │   ├── jobs.ts           # Background job system, cron scheduler
+│   ├── logger.ts         # Structured logging with level filtering
+│   ├── rate-limit.ts     # Per-token rate limiting
 │   ├── permissions.ts    # Permission enforcement
 │   ├── sessions.ts       # Session management, memory context
 │   ├── memory.ts         # SQLite + FTS5 long-term memory
@@ -297,6 +313,18 @@ flowmate-agent-server/
 ├── permissions.json      # Tool permissions config
 └── .env                  # Runtime configuration
 ```
+
+## Testing
+
+```bash
+# Run all tests
+bun test
+
+# Type check
+bun tsc --noEmit
+```
+
+Tests cover permissions enforcement, job scheduling/recovery, rate limiting, and configuration loading. CI runs both on every push and pull request to `main` via GitHub Actions.
 
 ## Acknowledgments
 
