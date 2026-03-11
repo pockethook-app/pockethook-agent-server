@@ -90,6 +90,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `LOCALE_COUNTRY` | (auto-detected) | User country for location-aware searches |
 | `LOCALE_CITY` | (auto-detected) | User city for regional context |
 | `LOCALE_TIMEZONE` | (auto-detected) | User timezone |
+| `LLM_BASE_URL` | — | Custom LLM API base URL (required for Ollama, optional for others) |
 | `TOOLS` | `all` | Enabled tools (see Permissions) |
 
 ### Supported providers
@@ -105,6 +106,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | Groq | API key | `llama-3.3-70b-versatile` |
 | xAI (Grok) | API key | `grok-3-mini-fast` |
 | OpenRouter | API key | `anthropic/claude-sonnet-4` |
+| Ollama (local) | None | `llama3.2` |
 
 ## API Endpoints
 

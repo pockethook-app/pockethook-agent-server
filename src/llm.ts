@@ -33,6 +33,11 @@ function resolveModel(config: Config): Model<Api> {
     xai: "openai-completions",
     openrouter: "openai-completions",
     cerebras: "openai-completions",
+    ollama: "openai-completions",
+  };
+
+  const defaultBaseUrls: Record<string, string> = {
+    ollama: "http://localhost:11434/v1",
   };
 
   return {
@@ -40,7 +45,7 @@ function resolveModel(config: Config): Model<Api> {
     name: config.llmModel,
     provider: config.llmProvider,
     api: apiMap[config.llmProvider] || "openai-completions",
-    baseUrl: "",
+    baseUrl: config.llmBaseUrl || defaultBaseUrls[config.llmProvider] || "",
     reasoning: false,
     input: ["text"] as ("text" | "image")[],
     maxTokens: 8192,

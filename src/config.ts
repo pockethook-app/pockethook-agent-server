@@ -13,6 +13,7 @@ export interface Config {
   llmApiKey: string;
   llmProvider: Provider;
   llmModel: string;
+  llmBaseUrl?: string;
   maxHistory: number;
   sessionTtlMs: number;
   workingDir: string;
@@ -277,9 +278,12 @@ export function loadConfig(): Config {
     port: Number(process.env.PORT) || 3000,
     authToken: requireEnv("AUTH_TOKEN"),
     agentName: process.env.AGENT_NAME || "FlowMate Assistant",
-    llmApiKey: requireEnv("LLM_API_KEY"),
+    llmApiKey: process.env.LLM_PROVIDER === "ollama"
+      ? (process.env.LLM_API_KEY || "ollama")
+      : requireEnv("LLM_API_KEY"),
     llmProvider: (process.env.LLM_PROVIDER || "anthropic") as Provider,
     llmModel: process.env.LLM_MODEL || "claude-sonnet-4-20250514",
+    llmBaseUrl: process.env.LLM_BASE_URL,
     maxHistory: Number(process.env.MAX_HISTORY) || 50,
     sessionTtlMs: (Number(process.env.SESSION_TTL_MINUTES) || 60) * 60 * 1000,
     workingDir: process.env.WORKING_DIR || join(PROJECT_ROOT, "workspace"),

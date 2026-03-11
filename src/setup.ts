@@ -69,6 +69,7 @@ const PROVIDERS = [
   { key: "groq", name: "Groq", defaultModel: "llama-3.3-70b-versatile", auth: "apikey" },
   { key: "xai", name: "xAI (Grok)", defaultModel: "grok-3-mini-fast", auth: "apikey" },
   { key: "openrouter", name: "OpenRouter", defaultModel: "anthropic/claude-sonnet-4", auth: "apikey" },
+  { key: "ollama", name: "Ollama (local)", defaultModel: "llama3.2", auth: "none" },
 ] as const;
 
 type ProviderEntry = (typeof PROVIDERS)[number];
@@ -155,6 +156,18 @@ async function selectProvider(env: Record<string, string>): Promise<ProviderEntr
 }
 
 async function configureAuth(provider: ProviderEntry, env: Record<string, string>): Promise<void> {
+  if (provider.auth === "none") {
+    env.LLM_API_KEY = "ollama";
+    delete env.OAUTH_REFRESH_TOKEN;
+    delete env.OAUTH_TOKEN_EXPIRES;
+    const baseUrl = await p.text({
+      message: "Ollama base URL",
+      initialValue: env.LLM_BASE_URL || "http://localhost:11434/v1",
+    });
+    if (p.isCancel(baseUrl)) cancelled();
+    env.LLM_BASE_URL = baseUrl;
+    return;
+  }
   if (provider.auth === "oauth-codex" || provider.auth === "oauth-copilot") {
     const label = provider.auth === "oauth-codex" ? "ChatGPT" : "GitHub";
     const proceed = await p.confirm({
