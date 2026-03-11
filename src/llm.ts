@@ -37,8 +37,13 @@ function resolveModel(config: Config): Model<Api> {
 
   return {
     id: config.llmModel,
+    name: config.llmModel,
     provider: config.llmProvider,
     api: apiMap[config.llmProvider] || "openai-completions",
+    baseUrl: "",
+    reasoning: false,
+    input: ["text"] as ("text" | "image")[],
+    maxTokens: 8192,
     contextWindow: 128000,
     maxOutputTokens: 8192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
