@@ -329,7 +329,7 @@ Tests cover permissions enforcement, job scheduling/recovery, rate limiting, and
 ## Acknowledgments
 
 - **[pi-mono](https://github.com/badlogic/pi-mono)** — The agent framework and multi-provider LLM abstraction (`pi-agent-core` and `pi-ai`) that power this server. Without their work, this project wouldn't be possible.
-- **[OpenClaw](https://github.com/openclaw/openclaw)** — The inspiration behind creating this server. OpenClaw pioneered the concept of connecting LLMs with iOS Shortcuts, and this project builds on that vision with a different architecture.
+- **[OpenClaw](https://github.com/nickytonline/OpenClaw)** — Inspiration for the self-hosted agent approach. OpenClaw demonstrated that a personal AI assistant running on your own devices, with local tool execution and multi-channel messaging, is a compelling model. This server adopts a similar local-first philosophy.
 
 ## License
 
