@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import type { Provider } from "@mariozechner/pi-ai";
+import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -22,6 +23,7 @@ export interface Config {
   searchUrl?: string;
   oauthRefreshToken?: string;
   oauthTokenExpires?: number;
+  locale?: { country: string; city?: string; timezone?: string };
 }
 
 // ── Base system prompt (fixed, loaded once) ─────────────────────────────
@@ -170,7 +172,7 @@ function getInstructions(): string {
       cachedInstructions = loadInstructions();
       cachedInstructionsMtime = mtime;
       if (cachedInstructions) {
-        console.log("Agent instructions reloaded.");
+        logger.info("Agent instructions reloaded.");
       }
     }
   } catch {
@@ -229,6 +231,18 @@ function loadSkills(): string {
 /**
  * Get the full system prompt: base (fixed) + skills (hot-reloaded on change).
  */
+let cachedLocalePrompt: string = "";
+
+export function setLocale(locale: Config["locale"]): void {
+  if (!locale) return;
+  const parts = [`The user is located in ${locale.country}`];
+  if (locale.city) parts[0] += `, ${locale.city}`;
+  parts[0] += ".";
+  if (locale.timezone) parts.push(`Timezone: ${locale.timezone}.`);
+  parts.push("Use this for location-aware searches, recommendations, and regional context (e.g., if they search for a city name that exists in multiple countries, prefer their region).");
+  cachedLocalePrompt = "\n\n## User location\n\n" + parts.join(" ");
+}
+
 export function getSystemPrompt(agentName: string): string {
   if (!BASE_SYSTEM_PROMPT) {
     BASE_SYSTEM_PROMPT = buildBaseSystemPrompt(agentName);
@@ -240,11 +254,11 @@ export function getSystemPrompt(agentName: string): string {
     cachedSkills = loadSkills();
     cachedSkillsMtime = currentMtime;
     if (cachedSkills) {
-      console.log(`Skills reloaded (${readdirSync(SKILLS_DIR).filter((f) => f.endsWith(".md") || f.endsWith(".txt")).length} file(s))`);
+      logger.info(`Skills reloaded (${readdirSync(SKILLS_DIR).filter((f) => f.endsWith(".md") || f.endsWith(".txt")).length} file(s))`);
     }
   }
 
-  return BASE_SYSTEM_PROMPT + getInstructions() + cachedSkills;
+  return BASE_SYSTEM_PROMPT + cachedLocalePrompt + getInstructions() + cachedSkills;
 }
 
 // ── Config ──────────────────────────────────────────────────────────────
@@ -252,7 +266,7 @@ export function getSystemPrompt(agentName: string): string {
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
-    console.error(`Missing required environment variable: ${name}`);
+    logger.error(`Missing required environment variable: ${name}`);
     process.exit(1);
   }
   return value;
@@ -276,7 +290,35 @@ export function loadConfig(): Config {
     searchUrl: process.env.SEARCH_URL,
     oauthRefreshToken: process.env.OAUTH_REFRESH_TOKEN,
     oauthTokenExpires: process.env.OAUTH_TOKEN_EXPIRES ? Number(process.env.OAUTH_TOKEN_EXPIRES) : undefined,
+    locale: process.env.LOCALE_COUNTRY
+      ? { country: process.env.LOCALE_COUNTRY, city: process.env.LOCALE_CITY, timezone: process.env.LOCALE_TIMEZONE }
+      : undefined,
   };
+}
+
+/**
+ * Auto-detect locale from IP geolocation (free, no API key needed).
+ * Only runs if LOCALE_COUNTRY is not set. Updates config in-place.
+ */
+export async function autoDetectLocale(config: Config): Promise<void> {
+  if (config.locale) return; // Already configured manually
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    const res = await fetch("http://ip-api.com/json/?fields=country,city,timezone", { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (!res.ok) return;
+
+    const data = await res.json() as { country?: string; city?: string; timezone?: string };
+    if (data.country) {
+      config.locale = { country: data.country, city: data.city, timezone: data.timezone };
+      logger.info("Locale auto-detected", { country: data.country, city: data.city, timezone: data.timezone });
+    }
+  } catch {
+    logger.debug("Locale auto-detection failed, skipping");
+  }
 }
 
 /**

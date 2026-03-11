@@ -1,0 +1,173 @@
+import { describe, test, expect } from "bun:test";
+import { parseInterval, isInterval, parseCron, nextCronDate, validateSchedule, nextRunFromSchedule } from "../src/jobs.js";
+
+describe("parseInterval", () => {
+  test("parses seconds", () => {
+    expect(parseInterval("30s")).toBe(30_000);
+    expect(parseInterval("1s")).toBe(1_000);
+  });
+
+  test("parses minutes", () => {
+    expect(parseInterval("5m")).toBe(300_000);
+    expect(parseInterval("1m")).toBe(60_000);
+  });
+
+  test("parses hours", () => {
+    expect(parseInterval("1h")).toBe(3_600_000);
+    expect(parseInterval("2h")).toBe(7_200_000);
+  });
+
+  test("parses days", () => {
+    expect(parseInterval("1d")).toBe(86_400_000);
+  });
+
+  test("parses weeks", () => {
+    expect(parseInterval("2w")).toBe(1_209_600_000);
+  });
+
+  test("returns null for invalid input", () => {
+    expect(parseInterval("abc")).toBeNull();
+    expect(parseInterval("")).toBeNull();
+    expect(parseInterval("0m")).toBeNull();
+    expect(parseInterval("-5m")).toBeNull();
+    expect(parseInterval("5x")).toBeNull();
+  });
+
+  test("is case insensitive", () => {
+    expect(parseInterval("5M")).toBe(300_000);
+    expect(parseInterval("1H")).toBe(3_600_000);
+  });
+});
+
+describe("isInterval", () => {
+  test("recognizes intervals", () => {
+    expect(isInterval("5m")).toBe(true);
+    expect(isInterval("1h")).toBe(true);
+    expect(isInterval("30s")).toBe(true);
+    expect(isInterval("1d")).toBe(true);
+    expect(isInterval("2w")).toBe(true);
+  });
+
+  test("rejects cron expressions", () => {
+    expect(isInterval("0 9 * * MON")).toBe(false);
+    expect(isInterval("*/5 * * * *")).toBe(false);
+  });
+
+  test("rejects invalid", () => {
+    expect(isInterval("abc")).toBe(false);
+    expect(isInterval("")).toBe(false);
+  });
+});
+
+describe("parseCron", () => {
+  test("parses simple cron", () => {
+    const fields = parseCron("0 9 * * *");
+    expect(fields).not.toBeNull();
+    expect(fields!.minutes.has(0)).toBe(true);
+    expect(fields!.hours.has(9)).toBe(true);
+    expect(fields!.daysOfMonth.size).toBe(31);
+    expect(fields!.months.size).toBe(12);
+    expect(fields!.daysOfWeek.size).toBe(7);
+  });
+
+  test("parses day names", () => {
+    const fields = parseCron("0 9 * * MON");
+    expect(fields).not.toBeNull();
+    expect(fields!.daysOfWeek.has(1)).toBe(true);
+    expect(fields!.daysOfWeek.size).toBe(1);
+  });
+
+  test("parses step expressions", () => {
+    const fields = parseCron("*/15 * * * *");
+    expect(fields).not.toBeNull();
+    expect(fields!.minutes.has(0)).toBe(true);
+    expect(fields!.minutes.has(15)).toBe(true);
+    expect(fields!.minutes.has(30)).toBe(true);
+    expect(fields!.minutes.has(45)).toBe(true);
+    expect(fields!.minutes.size).toBe(4);
+  });
+
+  test("parses ranges", () => {
+    const fields = parseCron("0 9-17 * * *");
+    expect(fields).not.toBeNull();
+    expect(fields!.hours.size).toBe(9);
+    expect(fields!.hours.has(9)).toBe(true);
+    expect(fields!.hours.has(17)).toBe(true);
+    expect(fields!.hours.has(8)).toBe(false);
+  });
+
+  test("parses lists", () => {
+    const fields = parseCron("0,30 * * * *");
+    expect(fields).not.toBeNull();
+    expect(fields!.minutes.size).toBe(2);
+    expect(fields!.minutes.has(0)).toBe(true);
+    expect(fields!.minutes.has(30)).toBe(true);
+  });
+
+  test("returns null for invalid cron", () => {
+    expect(parseCron("invalid")).toBeNull();
+    expect(parseCron("0 25 * * *")).toBeNull(); // hour 25
+    expect(parseCron("60 0 * * *")).toBeNull(); // minute 60
+    expect(parseCron("")).toBeNull();
+  });
+});
+
+describe("nextCronDate", () => {
+  test("calculates next run for daily at 9am", () => {
+    const after = new Date("2026-01-15T08:00:00Z");
+    const next = nextCronDate("0 9 * * *", after);
+    expect(next).not.toBeNull();
+    expect(next!.getHours()).toBe(9);
+    expect(next!.getMinutes()).toBe(0);
+  });
+
+  test("calculates next Monday", () => {
+    const after = new Date("2026-01-15T10:00:00Z"); // Wednesday
+    const next = nextCronDate("0 9 * * MON", after);
+    expect(next).not.toBeNull();
+    expect(next!.getDay()).toBe(1); // Monday
+  });
+
+  test("returns null for impossible schedules", () => {
+    // Feb 30 doesn't exist, but with month=2, day=30 — should never match
+    const result = nextCronDate("0 0 30 2 *");
+    expect(result).toBeNull();
+  });
+});
+
+describe("validateSchedule", () => {
+  test("accepts valid intervals", () => {
+    expect(validateSchedule("5m").valid).toBe(true);
+    expect(validateSchedule("1h").valid).toBe(true);
+  });
+
+  test("accepts valid cron expressions", () => {
+    expect(validateSchedule("0 9 * * *").valid).toBe(true);
+    expect(validateSchedule("*/5 * * * *").valid).toBe(true);
+    expect(validateSchedule("0 9 * * MON").valid).toBe(true);
+  });
+
+  test("rejects invalid schedules", () => {
+    expect(validateSchedule("abc").valid).toBe(false);
+    expect(validateSchedule("0 25 * * *").valid).toBe(false);
+  });
+});
+
+describe("nextRunFromSchedule", () => {
+  test("handles intervals", () => {
+    const now = new Date("2026-01-15T10:00:00Z");
+    const next = nextRunFromSchedule("5m", now);
+    expect(next).toBe(now.getTime() + 300_000);
+  });
+
+  test("handles cron expressions", () => {
+    const now = new Date("2026-01-15T08:00:00Z");
+    const next = nextRunFromSchedule("0 9 * * *", now);
+    expect(next).not.toBeNull();
+    expect(next!).toBeGreaterThan(now.getTime());
+  });
+
+  test("returns null for invalid schedules", () => {
+    expect(nextRunFromSchedule("invalid")).toBeNull();
+  });
+});

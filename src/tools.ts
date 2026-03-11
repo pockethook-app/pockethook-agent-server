@@ -7,7 +7,7 @@
 
 import { spawn } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { join, resolve, relative } from "path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { Permissions } from "./permissions.js";
@@ -16,6 +16,7 @@ import { createJob, listJobs, deleteJob, updateJobEnabled } from "./jobs.js";
 import type { Job } from "./jobs.js";
 import { commitWorkspace, backupConfigFile, backupSkills, configPaths } from "./versioning.js";
 import type { Config } from "./config.js";
+import { logger } from "./logger.js";
 
 const MAX_OUTPUT = 50_000; // chars
 
@@ -466,13 +467,17 @@ function createWebFetchTool(): AgentTool<typeof webFetchSchema> {
     parameters: webFetchSchema,
     async execute(_id, params) {
       try {
-        // Use Jina Reader to get clean markdown content
+        // Use Jina Reader to get clean markdown content (30s timeout)
         const jinaUrl = `https://r.jina.ai/${params.url}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30_000);
         const res = await fetch(jinaUrl, {
           headers: {
             "Accept": "text/markdown",
           },
+          signal: controller.signal,
         });
+        clearTimeout(timeout);
 
         if (!res.ok) {
           throw new Error(`Jina Reader returned ${res.status}`);
@@ -522,7 +527,7 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     if (factory) {
       tools.push(factory());
     } else if (name !== "respond") {
-      console.warn(`Unknown tool: ${name}`);
+      logger.warn(`Unknown tool: ${name}`);
     }
   }
 

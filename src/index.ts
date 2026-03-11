@@ -1,5 +1,5 @@
 import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "@flow-mate/sdk";
-import { loadConfig, getSystemPrompt } from "./config.js";
+import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale } from "./config.js";
 import { chat } from "./llm.js";
 import { createTools } from "./tools.js";
 import {
@@ -14,24 +14,44 @@ import { loadPermissions } from "./permissions.js";
 import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
 import { getDashboardHtml, getJobsJson } from "./dashboard.js";
 import { initWorkspaceGit } from "./versioning.js";
+import { checkRateLimit, configureRateLimit } from "./rate-limit.js";
+import { logger } from "./logger.js";
 
 const config = loadConfig();
+
+// Configure rate limiting from env
+const rateLimitMax = Number(process.env.RATE_LIMIT_MAX) || undefined;
+const rateLimitWindow = Number(process.env.RATE_LIMIT_WINDOW_MS) || undefined;
+if (rateLimitMax || rateLimitWindow) {
+  configureRateLimit({ maxRequests: rateLimitMax, windowMs: rateLimitWindow });
+}
+
 const permissions = loadPermissions(process.env.TOOLS);
 const tools = createTools(config.workingDir, permissions, config);
 
-console.log(`Tools: [${permissions.tools.join(", ")}]`);
-console.log(`Working dir: ${config.workingDir}`);
-console.log(`Boundary: ${permissions.enforceWorkingDir ? "enforced" : "open"}`);
+logger.info(`Tools: [${permissions.tools.join(", ")}]`);
+logger.info(`Working dir: ${config.workingDir}`);
+logger.info(`Boundary: ${permissions.enforceWorkingDir ? "enforced" : "open"}`);
 if (permissions.shell.blockedCommands.length > 0) {
-  console.log(`Shell blocked: ${permissions.shell.blockedCommands.length} commands, ${permissions.shell.blockedPatterns.length} patterns`);
+  logger.info("Shell permissions", { blockedCommands: permissions.shell.blockedCommands.length, blockedPatterns: permissions.shell.blockedPatterns.length });
 }
 if (permissions.filesystem.blockedPaths.length > 0) {
-  console.log(`Filesystem blocked: ${permissions.filesystem.blockedPaths.join(", ")}`);
+  logger.info(`Filesystem blocked: ${permissions.filesystem.blockedPaths.join(", ")}`);
 }
 
 // Initialize jobs system and workspace versioning
 initJobs();
 initWorkspaceGit();
+
+// Locale: use manual config or auto-detect from IP
+if (config.locale) {
+  setLocale(config.locale);
+  logger.info("Locale configured", { country: config.locale.country, city: config.locale.city });
+} else {
+  autoDetectLocale(config).then(() => {
+    if (config.locale) setLocale(config.locale);
+  });
+}
 
 // Chat function for prompt-type jobs — stores full FlowMate response as JSON
 const JOB_PREFIX = "[BACKGROUND JOB] You are running inside a background job. Do the work directly — do NOT create more jobs. Use web_search, web_fetch, shell, read, write tools directly to complete the task.\n\n";
@@ -48,9 +68,11 @@ startScheduler(config.workingDir, jobChatFn);
 setInterval(() => {
   const cleaned = cleanExpiredSessions(config.sessionTtlMs);
   if (cleaned > 0) {
-    console.log(`Cleaned ${cleaned} expired session(s)`);
+    logger.info(`Cleaned ${cleaned} expired session(s)`);
   }
 }, 5 * 60 * 1000);
+
+const API_VERSION = "1";
 
 Bun.serve({
   port: config.port,
@@ -59,12 +81,12 @@ Bun.serve({
     const url = new URL(req.url);
 
     if (req.method === "GET" && url.pathname === "/health") {
-      return new Response("true", { status: 200 });
+      return new Response("true", { status: 200, headers: { "X-API-Version": API_VERSION } });
     }
 
     if (req.method === "GET" && url.pathname === "/jobs") {
       const pending = hasUndeliveredResults();
-      console.log(`[${new Date().toISOString()}] GET /jobs → ${pending}`);
+      logger.debug("GET /jobs", { pending });
       return new Response(pending ? "true" : "false", { status: 200 });
     }
 
@@ -97,6 +119,22 @@ Bun.serve({
       return new Response("Unauthorized", { status: 401 });
     }
 
+    // Rate limiting
+    const rateCheck = checkRateLimit(token);
+    if (!rateCheck.allowed) {
+      logger.warn("Rate limit exceeded");
+      return new Response("Too Many Requests", {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil((rateCheck.retryAfterMs ?? 60_000) / 1000)) },
+      });
+    }
+
+    // Request size limit (1MB)
+    const contentLength = req.headers.get("Content-Length");
+    if (contentLength && parseInt(contentLength, 10) > 1_048_576) {
+      return new Response("Payload Too Large", { status: 413 });
+    }
+
     let sessionId: string;
     let chatInput: string;
     try {
@@ -108,7 +146,12 @@ Bun.serve({
       return new Response(message, { status: 400 });
     }
 
-    console.log(`[${new Date().toISOString()}] ${sessionId.slice(0, 8)}: ${chatInput.slice(0, 100)}`);
+    // Message length limit (10,000 chars — matches FlowMate app limit)
+    if (chatInput.length > 10_000) {
+      return new Response("Message too long (max 10,000 characters)", { status: 413 });
+    }
+
+    logger.info("Chat request", { session: sessionId.slice(0, 8), inputLength: chatInput.length });
 
     // Direct delivery: if fetchPendingTasks and there are completed jobs, respond immediately without LLM
     const undelivered = getUndeliveredResults();
@@ -132,7 +175,7 @@ Bun.serve({
               continue;
             }
           } catch {
-            // Not JSON — treat as plain text
+            // Not JSON — treat as plain text (expected for shell job output)
           }
           // Shell job or non-JSON result — wrap with optional shortcut
           let data: Record<string, unknown> | undefined;
@@ -160,7 +203,7 @@ Bun.serve({
 
       const ids = undelivered.map((j) => j.id);
       markDelivered(ids);
-      console.log(`[${sessionId.slice(0, 8)}] Delivered ${undelivered.length} job result(s) directly (no LLM) — marked delivered: [${ids.join(", ")}]`);
+      logger.info("Delivered job results directly", { session: sessionId.slice(0, 8), count: undelivered.length, ids });
 
       return toResponse(responses(jobResponses));
     }
@@ -199,18 +242,18 @@ Bun.serve({
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : "LLM request failed";
-      console.error(`LLM error for ${sessionId.slice(0, 8)}: ${message}`);
+      logger.error("LLM error", { session: sessionId.slice(0, 8), error: message });
       return toResponse(text("Sorry, I couldn't process your request. Please try again."));
     }
   },
 });
 
 const base = `http://localhost:${config.port}`;
-console.log(`\nflowmate-agent-server running on ${base}`);
-console.log(`  POST ${base}/           → Chat`);
-console.log(`  GET  ${base}/health     → Health check`);
-console.log(`  GET  ${base}/jobs       → Jobs polling`);
+logger.info(`flowmate-agent-server running on ${base}`);
+logger.info(`  POST ${base}/           → Chat`);
+logger.info(`  GET  ${base}/health     → Health check`);
+logger.info(`  GET  ${base}/jobs       → Jobs polling`);
 if (config.dashboardEnabled) {
-  console.log(`  GET  ${base}/dashboard  → Dashboard`);
+  logger.info(`  GET  ${base}/dashboard  → Dashboard`);
 }
-console.log(`\nLLM: ${config.llmProvider}/${config.llmModel}`);
+logger.info(`LLM: ${config.llmProvider}/${config.llmModel}`);

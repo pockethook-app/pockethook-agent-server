@@ -14,6 +14,7 @@ import { spawn } from "child_process";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { mkdirSync, existsSync } from "fs";
+import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DATA_DIR = join(PROJECT_ROOT, "data");
@@ -90,9 +91,13 @@ function getDb(): Database {
   // Migration: add columns if upgrading from older schema
   try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_shortcut TEXT"); } catch {}
   try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_data TEXT"); } catch {}
+  try { db.run("ALTER TABLE jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0"); } catch {}
 
   return db;
 }
+
+const MAX_RETRIES = 2;
+const RETRY_DELAYS = [60_000, 300_000]; // 1 min, 5 min
 
 // ── Schedule parsing ─────────────────────────────────────────────────────
 
@@ -281,10 +286,10 @@ export function initJobs(): void {
   // Recover jobs stuck in 'running' from a previous crash/restart
   const stuck = d.run("UPDATE jobs SET status = 'pending' WHERE status = 'running'");
   if (stuck.changes > 0) {
-    console.log(`Recovered ${stuck.changes} stuck job(s) from 'running' → 'pending'.`);
+    logger.warn(`Recovered ${stuck.changes} stuck job(s) from 'running' → 'pending'`);
   }
 
-  console.log("Jobs system initialized.");
+  logger.info("Jobs system initialized");
 }
 
 export function createJob(opts: CreateJobOptions): Job {
@@ -412,7 +417,7 @@ export function startScheduler(workingDir: string, chatFn?: SchedulerChatFn): vo
   // Run scheduler tick every 60 seconds
   schedulerInterval = setInterval(() => {
     schedulerTick().catch((err) => {
-      console.error("Scheduler tick error:", err instanceof Error ? err.message : err);
+      logger.error("Scheduler tick error", { error: err instanceof Error ? err.message : String(err) });
     });
   }, 60_000);
 
@@ -423,14 +428,14 @@ export function startScheduler(workingDir: string, chatFn?: SchedulerChatFn): vo
     });
   }, 5_000);
 
-  console.log("Job scheduler started (60s tick).");
+  logger.info("Job scheduler started (60s tick)");
 }
 
 export function stopScheduler(): void {
   if (schedulerInterval) {
     clearInterval(schedulerInterval);
     schedulerInterval = null;
-    console.log("Job scheduler stopped.");
+    logger.info("Job scheduler stopped");
   }
 }
 
@@ -447,7 +452,7 @@ async function schedulerTick(): Promise<void> {
   for (const job of dueJobs) {
     // Mark as running
     d.run("UPDATE jobs SET status = 'running' WHERE id = ?", [job.id]);
-    console.log(`[Job #${job.id}] Running "${job.name}" (${job.execution_type})...`);
+    logger.info(`Job #${job.id} running`, { name: job.name, type: job.execution_type });
 
     try {
       let output: string;
@@ -473,9 +478,9 @@ async function schedulerTick(): Promise<void> {
       const completedAt = Date.now();
 
       if (ok) {
-        console.log(`[Job #${job.id}] Completed successfully.`);
+        logger.info(`Job #${job.id} completed`);
       } else {
-        console.log(`[Job #${job.id}] Failed: ${output.slice(0, 100)}`);
+        logger.warn(`Job #${job.id} failed`, { output: output.slice(0, 200) });
       }
 
       const resultField = ok ? "result" : "error";
@@ -495,6 +500,16 @@ async function schedulerTick(): Promise<void> {
             ["Could not calculate next run time from schedule: " + job.schedule, completedAt, job.id],
           );
         }
+      } else if (!ok && job.type === "once" && (job as any).retries < MAX_RETRIES) {
+        // Retry failed "once" jobs with exponential backoff
+        const retryCount = ((job as any).retries ?? 0) + 1;
+        const delay = RETRY_DELAYS[retryCount - 1] ?? RETRY_DELAYS[RETRY_DELAYS.length - 1]!;
+        const nextRetry = completedAt + delay;
+        logger.info(`Job #${job.id} scheduling retry ${retryCount}/${MAX_RETRIES}`, { delayMs: delay });
+        d.run(
+          "UPDATE jobs SET status = 'pending', error = ?, completed_at = ?, next_run_at = ?, retries = ? WHERE id = ?",
+          [output || null, completedAt, nextRetry, retryCount, job.id],
+        );
       } else {
         d.run(
           `UPDATE jobs SET status = '${ok ? "completed" : "failed"}', ${resultField} = ?, completed_at = ?, delivered = 0 WHERE id = ?`,
@@ -503,7 +518,7 @@ async function schedulerTick(): Promise<void> {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[Job #${job.id}] Unexpected error: ${msg}`);
+      logger.error(`Job #${job.id} unexpected error`, { error: msg });
       d.run(
         "UPDATE jobs SET status = 'failed', error = ?, completed_at = ? WHERE id = ?",
         [msg, Date.now(), job.id],
