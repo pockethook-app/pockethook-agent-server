@@ -10,7 +10,7 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and mul
 
 ## Features
 
-- **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter
+- **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter, Ollama
 - **OAuth authentication** — GitHub Copilot and OpenAI Codex via device code / browser flow
 - **Agent tools** — Shell, file read/write, directory listing, background jobs, web search, web scraping
 - **Background jobs** — Schedule one-time or recurring tasks with cron expressions

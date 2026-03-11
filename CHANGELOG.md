@@ -14,6 +14,7 @@ Pre-launch hardening.
 - User locale auto-detection for location-aware searches (`LOCALE_COUNTRY`, `LOCALE_CITY`, `LOCALE_TIMEZONE`)
 - GitHub Actions CI workflow (tests + type checking on push/PR to main)
 - Unit tests for permissions, jobs, rate limiting, and configuration
+- Ollama support — run local LLMs with no API key, no data leaves your network (`LLM_BASE_URL`)
 
 ### Fixes
 
