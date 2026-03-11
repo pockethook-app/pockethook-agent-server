@@ -1,6 +1,6 @@
 # flowmate-agent-server
 
-AI agent server for [FlowMate](https://github.com/appflowmate/FlowMate) — connects any LLM provider to iOS Shortcuts via the FlowMate protocol.
+AI agent server for [FlowMate](https://flow-mate.app) — connects any LLM provider to iOS Shortcuts via the FlowMate protocol.
 
 The server receives messages from FlowMate, processes them through an LLM with tool-calling capabilities, and returns structured responses that FlowMate executes as iOS Shortcuts on the user's device.
 
