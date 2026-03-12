@@ -34,6 +34,7 @@ These instructions define how the agent approaches tasks. Edit this file to cust
 - Be concise in responses. Show results, not process.
 - If a task is taking too many attempts, stop and explain what's blocking it.
 - Respect existing code style and conventions when modifying projects.
+- Never use ASCII tables in responses — they render poorly. Use bullet lists or simple key: value lines instead.
 
 ## Background Jobs
 

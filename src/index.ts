@@ -12,8 +12,9 @@ import {
 import { memoryStats } from "./memory.js";
 import { loadPermissions } from "./permissions.js";
 import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
-import { getDashboardHtml, getJobsJson } from "./dashboard.js";
+import { getDashboardHtml, getJobsJson, hasDistDashboard, serveDashboardAsset } from "./dashboard.js";
 import { initWorkspaceGit } from "./versioning.js";
+import { cleanupServers } from "./servers.js";
 import { checkRateLimit, configureRateLimit } from "./rate-limit.js";
 import { logger } from "./logger.js";
 
@@ -90,10 +91,20 @@ Bun.serve({
       return new Response(pending ? "true" : "false", { status: 200 });
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard") {
+    if (req.method === "GET" && (url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"))) {
       if (!config.dashboardEnabled) {
         return new Response("Dashboard is disabled. Set DASHBOARD=true in .env to enable.", { status: 404 });
       }
+
+      // Serve static assets from dist/ (for built projects like Svelte/React/Vue)
+      const subpath = url.pathname.replace(/^\/dashboard\/?/, "");
+      if (subpath && hasDistDashboard()) {
+        const asset = serveDashboardAsset(subpath);
+        if (asset) return asset;
+        return new Response("Not Found", { status: 404 });
+      }
+
+      // Serve index HTML (dist/index.html > dashboard.html > built-in default)
       return new Response(getDashboardHtml(), {
         status: 200,
         headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -257,3 +268,7 @@ if (config.dashboardEnabled) {
   logger.info(`  GET  ${base}/dashboard  → Dashboard`);
 }
 logger.info(`LLM: ${config.llmProvider}/${config.llmModel}`);
+
+// Cleanup dev servers on shutdown
+process.on("SIGINT", () => { cleanupServers(); process.exit(0); });
+process.on("SIGTERM", () => { cleanupServers(); process.exit(0); });

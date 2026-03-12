@@ -14,6 +14,7 @@ import type { Permissions } from "./permissions.js";
 import { checkShellPermission, checkPathPermission } from "./permissions.js";
 import { createJob, listJobs, deleteJob, updateJobEnabled } from "./jobs.js";
 import type { Job } from "./jobs.js";
+import { startServer, stopServer, listServers, getAvailableTunnels } from "./servers.js";
 import { commitWorkspace, backupConfigFile, backupSkills, configPaths } from "./versioning.js";
 import type { Config } from "./config.js";
 import { logger } from "./logger.js";
@@ -504,9 +505,123 @@ function createWebFetchTool(): AgentTool<typeof webFetchSchema> {
   };
 }
 
+// ── Server management tools ──────────────────────────────────────────────
+
+const startServerSchema = Type.Object({
+  name: Type.String({ description: "Human-readable name for the server (e.g., 'Hugo blog', 'React app')" }),
+  command: Type.String({ description: "Shell command to start the dev server. Use $PORT as placeholder for the assigned port (e.g., 'hugo server -p $PORT', 'npm run dev -- --port $PORT')" }),
+  cwd: Type.String({ description: "Working directory for the command (absolute path or relative to workspace)" }),
+  port: Type.Optional(Type.Number({ description: "Preferred port (default: auto-assign starting from 4000)" })),
+  tunnel: Type.Optional(Type.Boolean({ description: "Expose via HTTPS tunnel (Tailscale). Default: false" })),
+});
+
+function createStartServerTool(cwd: string): AgentTool<typeof startServerSchema> {
+  return {
+    name: "start_server",
+    label: "Start a dev server",
+    description: "Start a long-running dev server for a workspace project. The server runs in the background and can optionally be exposed via HTTPS tunnel. Use $PORT in the command as a placeholder for the assigned port.",
+    parameters: startServerSchema,
+    async execute(_id, params) {
+      try {
+        const resolvedCwd = resolve(cwd, params.cwd);
+        const entry = startServer({
+          name: params.name,
+          command: params.command,
+          cwd: resolvedCwd,
+          port: params.port,
+          tunnel: params.tunnel,
+        });
+
+        let msg = `Server "${entry.name}" started (ID #${entry.id}, port ${entry.port}, PID ${entry.pid}).`;
+        msg += `\nLocal: http://localhost:${entry.port}`;
+        if (entry.tunnelUrl) {
+          msg += `\nPublic: ${entry.tunnelUrl}`;
+        }
+        return {
+          content: [{ type: "text", text: msg }],
+          details: { id: entry.id, port: entry.port, tunnelUrl: entry.tunnelUrl },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error starting server: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
+const stopServerSchema = Type.Object({
+  id: Type.Number({ description: "Server ID to stop" }),
+});
+
+function createStopServerTool(): AgentTool<typeof stopServerSchema> {
+  return {
+    name: "stop_server",
+    label: "Stop a dev server",
+    description: "Stop a running dev server by ID. Also removes its tunnel if one was configured.",
+    parameters: stopServerSchema,
+    async execute(_id, params) {
+      const result = stopServer(params.id);
+      if (result.stopped) {
+        return {
+          content: [{ type: "text", text: `Server "${result.name}" (ID #${params.id}) stopped.` }],
+          details: { stopped: true },
+        };
+      }
+      return {
+        content: [{ type: "text", text: `Server #${params.id} not found.` }],
+        details: { stopped: false },
+      };
+    },
+  };
+}
+
+const listServersSchema = Type.Object({});
+
+function createListServersTool(): AgentTool<typeof listServersSchema> {
+  return {
+    name: "list_servers",
+    label: "List running dev servers",
+    description: "List all running dev servers with their ports, PIDs, and tunnel URLs.",
+    parameters: listServersSchema,
+    async execute() {
+      const servers = listServers();
+      const tunnels = getAvailableTunnels();
+
+      if (servers.length === 0) {
+        const availableTunnels = tunnels.filter((t) => t.available).map((t) => t.name);
+        const tunnelInfo = availableTunnels.length > 0
+          ? `Available tunnels: ${availableTunnels.join(", ")}`
+          : "No tunnel tools installed (Tailscale, ngrok, or cloudflared)";
+        return {
+          content: [{ type: "text", text: `No servers running.\n${tunnelInfo}` }],
+          details: { count: 0, tunnels: availableTunnels },
+        };
+      }
+
+      const lines = servers.map((s) => {
+        let line = `#${s.id} "${s.name}" — port ${s.port} (PID ${s.pid})`;
+        line += `\n    Local: http://localhost:${s.port}`;
+        if (s.tunnelUrl) {
+          line += `\n    Public: ${s.tunnelUrl}`;
+        }
+        line += `\n    Dir: ${s.cwd}`;
+        line += `\n    Started: ${s.startedAt}`;
+        return line;
+      });
+
+      return {
+        content: [{ type: "text", text: lines.join("\n\n") }],
+        details: { count: servers.length },
+      };
+    },
+  };
+}
+
 // ── Tool factory ────────────────────────────────────────────────────────
 
-type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch";
+type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers";
 
 export function createTools(cwd: string, perms: Permissions, config?: Config): AgentTool<any>[] {
   const factories: Record<ToolName, () => AgentTool<any>> = {
@@ -519,6 +634,9 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     delete_job: () => createDeleteJobTool(),
     web_search: () => createWebSearchTool(config!),
     web_fetch: () => createWebFetchTool(),
+    start_server: () => createStartServerTool(cwd),
+    stop_server: () => createStopServerTool(),
+    list_servers: () => createListServersTool(),
   };
 
   const tools: AgentTool<any>[] = [];

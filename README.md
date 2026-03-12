@@ -12,8 +12,9 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and mul
 
 - **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter, Ollama
 - **OAuth authentication** — GitHub Copilot and OpenAI Codex via device code / browser flow
-- **Agent tools** — Shell, file read/write, directory listing, background jobs, web search, web scraping
+- **Agent tools** — Shell, file read/write, directory listing, background jobs, web search, web scraping, dev server management
 - **Background jobs** — Schedule one-time or recurring tasks with cron expressions
+- **Dev server management** — Start, stop, and list dev servers for workspace projects with optional HTTPS tunnel exposure
 - **Hot-reloadable skills** — Define shortcuts as `.md` files in `skills/`, no restart needed
 - **Self-managing skills** — The agent can create, edit, and delete skill definitions
 - **Agent instructions** — Editable `agent-instructions.md` to customize agent behavior, hot-reloaded
@@ -127,7 +128,14 @@ Response:
 
 Shows a live overview of background jobs with status, schedule, and output. Auto-refreshes every 30 seconds. Disabled when `DASHBOARD=false`.
 
-Fully customizable: place a `dashboard.html` in `workspace/dashboard/` to override the built-in default. The file is hot-reloaded on change. The agent can also edit it when asked by the user — each user gets a unique, personalized dashboard.
+Fully customizable with two approaches:
+
+- **Single HTML file** — Place a `dashboard.html` in `workspace/dashboard/` for quick customizations. Hot-reloaded on change.
+- **Full project** — Create a framework project (Svelte, React, Vue, etc.) in `workspace/dashboard/` with build output to `dist/`. The server serves all static assets from `dist/` under `/dashboard/` (JS, CSS, images, fonts).
+
+Priority: `dist/index.html` > `dashboard.html` > built-in default.
+
+The agent can create and edit dashboards when asked by the user — each user gets a unique, personalized dashboard.
 
 All responses include an `X-API-Version` header with the current server version.
 
@@ -259,11 +267,24 @@ The agent has three job management tools: `create_job`, `list_jobs`, `delete_job
 - **`web_search`** — Search the web via Serper.dev or SearXNG. Returns titles, snippets, and URLs.
 - **`web_fetch`** — Fetch any URL and extract clean readable content (via [Jina Reader](https://jina.ai/reader/)). Used to read full articles, product pages, reviews, etc.
 
+## Dev Servers
+
+The agent can start and manage dev servers for workspace projects. When the agent creates a web project (Hugo, Astro, Next.js, Flask, etc.), it proactively offers to serve it.
+
+Two modes:
+
+- **Preview** — Starts a local dev server on an auto-assigned port (starting from 4000).
+- **Public** — Starts the server and exposes it via HTTPS tunnel (Tailscale).
+
+The agent uses `$PORT` as a placeholder in commands, which gets replaced with the assigned port.
+
+Server tools: `start_server`, `stop_server`, `list_servers`. State is persisted in `data/servers.json`. Running servers are cleaned up when the main server stops.
+
 ## Permissions
 
 Granular tool permissions are stored in `permissions.json` (configure via `bun run permissions` or `bun run setup`):
 
-- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`
+- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`, `start_server`, `stop_server`, `list_servers`
 - **Working directory boundary** — Prevents the agent from escaping `WORKING_DIR`
 - **Blocked shell commands** — e.g., `sudo`, `rm -rf /`, `shutdown`
 - **Blocked shell patterns** — Regex patterns like `curl.*\|.*sh`
@@ -299,7 +320,8 @@ flowmate-agent-server/
 │   ├── config.ts         # Config loading, system prompt, hot-reload
 │   ├── dashboard.ts      # Web dashboard HTML and jobs API
 │   ├── llm.ts            # Agent execution, LLM communication
-│   ├── tools.ts          # Tool implementations (shell, read, write, ls, jobs)
+│   ├── tools.ts          # Tool implementations (shell, read, write, ls, jobs, servers)
+│   ├── servers.ts        # Dev server process manager (start/stop/list, tunnel)
 │   ├── versioning.ts     # Workspace git + config backups
 │   ├── jobs.ts           # Background job system, cron scheduler
 │   ├── logger.ts         # Structured logging with level filtering

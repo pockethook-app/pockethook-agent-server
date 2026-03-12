@@ -1,24 +1,49 @@
 /**
- * Dashboard HTML template.
+ * Dashboard serving.
  *
- * If a custom `dashboard.html` exists in workspace/dashboard/, it is served
- * instead of the built-in default. The file is hot-reloaded on change
- * (checked via mtime). The agent can edit this file on the user's behalf.
+ * Serves the dashboard with the following priority:
+ *   1. Built project: workspace/dashboard/dist/index.html (+ static assets)
+ *   2. Custom single file: workspace/dashboard/dashboard.html
+ *   3. Built-in default HTML
  *
- * The custom HTML can fetch `/api/jobs` for job data.
+ * All custom files are hot-reloaded on change (checked via mtime).
+ * Built projects can include JS/CSS/image assets under dist/.
+ *
+ * The dashboard can fetch `/api/jobs` for job data.
  */
 
 import { existsSync, readFileSync, statSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join, extname } from "path";
 import { fileURLToPath } from "url";
 import { listJobs } from "./jobs.js";
 import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const CUSTOM_DASHBOARD_PATH = join(PROJECT_ROOT, "workspace", "dashboard", "dashboard.html");
+const DASHBOARD_DIR = join(PROJECT_ROOT, "workspace", "dashboard");
+const DIST_DIR = join(DASHBOARD_DIR, "dist");
+const CUSTOM_DASHBOARD_PATH = join(DASHBOARD_DIR, "dashboard.html");
 
 let cachedCustomHtml: string | null = null;
 let cachedCustomMtime: number = 0;
+
+const MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".map": "application/json",
+};
 
 export function getJobsJson(): object {
   const jobs = listJobs();
@@ -39,8 +64,65 @@ export function getJobsJson(): object {
   }));
 }
 
+/**
+ * Check if a built project exists (dist/index.html).
+ */
+export function hasDistDashboard(): boolean {
+  return existsSync(join(DIST_DIR, "index.html"));
+}
+
+/**
+ * Serve a static file from workspace/dashboard/dist/.
+ * Returns null if the file doesn't exist or the path escapes dist/.
+ */
+export function serveDashboardAsset(subpath: string): Response | null {
+  // Normalize: empty or "/" → index.html
+  const cleaned = subpath.replace(/^\/+/, "") || "index.html";
+
+  const filePath = join(DIST_DIR, cleaned);
+
+  // Prevent path traversal
+  if (!filePath.startsWith(DIST_DIR)) {
+    return null;
+  }
+
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    return null;
+  }
+
+  const ext = extname(filePath).toLowerCase();
+  const contentType = MIME_TYPES[ext] || "application/octet-stream";
+  const content = readFileSync(filePath);
+
+  return new Response(content, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=31536000, immutable",
+    },
+  });
+}
+
+/**
+ * Get the dashboard index HTML.
+ * Priority: dist/index.html > dashboard.html > built-in default.
+ */
 export function getDashboardHtml(): string {
-  // Check for custom dashboard.html (hot-reloaded)
+  // 1. Check for built project (dist/index.html)
+  const distIndex = join(DIST_DIR, "index.html");
+  try {
+    if (existsSync(distIndex)) {
+      const mtime = statSync(distIndex).mtimeMs;
+      if (mtime !== cachedCustomMtime || cachedCustomHtml === null) {
+        cachedCustomHtml = readFileSync(distIndex, "utf-8");
+        cachedCustomMtime = mtime;
+        logger.info("Dashboard dist/index.html reloaded");
+      }
+      return cachedCustomHtml;
+    }
+  } catch {}
+
+  // 2. Check for custom dashboard.html (hot-reloaded)
   try {
     if (existsSync(CUSTOM_DASHBOARD_PATH)) {
       const mtime = statSync(CUSTOM_DASHBOARD_PATH).mtimeMs;
@@ -53,11 +135,11 @@ export function getDashboardHtml(): string {
     }
   } catch {}
 
-  // Reset cache if file was deleted
-  if (cachedCustomHtml !== null && !existsSync(CUSTOM_DASHBOARD_PATH)) {
+  // Reset cache if custom files were deleted
+  if (cachedCustomHtml !== null && !existsSync(distIndex) && !existsSync(CUSTOM_DASHBOARD_PATH)) {
     cachedCustomHtml = null;
     cachedCustomMtime = 0;
-    logger.info("Custom dashboard.html removed, using default");
+    logger.info("Custom dashboard removed, using default");
   }
 
   return DEFAULT_DASHBOARD_HTML;
