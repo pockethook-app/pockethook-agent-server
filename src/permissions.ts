@@ -13,6 +13,13 @@ import { logger } from "./logger.js";
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PERMISSIONS_PATH = join(PROJECT_ROOT, "permissions.json");
 
+// Paths outside working dir that the agent is allowed to access
+const ALLOWED_EXTERNAL_PATHS = [
+  join(PROJECT_ROOT, "skills"),
+  join(PROJECT_ROOT, "custom-tools"),
+  join(PROJECT_ROOT, "agent-instructions.md"),
+];
+
 // ── Types ────────────────────────────────────────────────────────────────
 
 export interface ShellPermissions {
@@ -183,7 +190,11 @@ export function checkPathPermission(
 
   // Boundary check: prevent escaping working directory
   if (perms.enforceWorkingDir) {
-    if (resolvedPath !== resolvedCwd && !resolvedPath.startsWith(resolvedCwd + "/")) {
+    const inWorkingDir = resolvedPath === resolvedCwd || resolvedPath.startsWith(resolvedCwd + "/");
+    const inAllowedExternal = ALLOWED_EXTERNAL_PATHS.some(
+      (allowed) => resolvedPath === allowed || resolvedPath.startsWith(allowed + "/"),
+    );
+    if (!inWorkingDir && !inAllowedExternal) {
       return { allowed: false, reason: `Path escapes working directory: ${filePath}` };
     }
   }
