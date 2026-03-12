@@ -315,4 +315,5 @@ export const configPaths = {
   agentInstructions: join(PROJECT_ROOT, "agent-instructions.md"),
   permissions: join(PROJECT_ROOT, "permissions.json"),
   skillsDir: join(PROJECT_ROOT, "skills"),
+  customToolsDir: join(PROJECT_ROOT, "custom-tools"),
 };

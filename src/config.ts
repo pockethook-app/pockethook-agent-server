@@ -3,6 +3,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import type { Provider } from "@mariozechner/pi-ai";
 import { logger } from "./logger.js";
+import { getCustomToolsPrompt, CUSTOM_TOOLS_DIR } from "./custom-tools.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -186,6 +187,40 @@ Multi-step:
     { msg: "Done!", shortcut: "Notify", data: { title: "Done" } }
   ] })
 
+## Custom tools
+
+You can install and register new tools that extend your capabilities. Custom tools are shell commands wrapped as agent tools, defined as .md files in: ${CUSTOM_TOOLS_DIR}
+
+### When to create a custom tool
+When the user asks you to install a CLI tool or library and use it for tasks (e.g., "install playwright and take screenshots", "install ffmpeg and convert videos"), you should:
+1. Install the dependency using shell (e.g., \`bun add playwright\`, \`brew install ffmpeg\`)
+2. Create a custom tool definition in \`${CUSTOM_TOOLS_DIR}\` so you can use it in future conversations
+3. Confirm to the user what was installed and what the new tool can do
+
+### Custom tool file format
+\`\`\`markdown
+### Tool Display Name
+
+Tool name: \`tool_name\`
+
+Description of what it does.
+
+Install: \`command to install dependencies\`
+
+Command: \`command with $param placeholders\`
+
+Parameters:
+- paramName (type, required/optional): Description. Default: value
+\`\`\`
+
+### Rules
+- Tool name must be lowercase with underscores (e.g., \`web_screenshot\`, \`pdf_convert\`)
+- Use \`$paramName\` in the Command to substitute parameter values
+- The Install command runs automatically the first time the tool is used (only once)
+- One tool per file, kebab-case file names (e.g., \`web-screenshot.md\`)
+- Custom tools are hot-reloaded — available on the next request after creation
+- If the user asks "what tools do you have?", list both built-in and custom tools
+
 Keep responses concise. You can use Markdown in msg (bold, code blocks, lists, etc.).`;
 }
 
@@ -300,7 +335,7 @@ export function getSystemPrompt(agentName: string): string {
     }
   }
 
-  return BASE_SYSTEM_PROMPT + cachedLocalePrompt + getInstructions() + cachedSkills;
+  return BASE_SYSTEM_PROMPT + cachedLocalePrompt + getInstructions() + cachedSkills + getCustomToolsPrompt();
 }
 
 // ── Config ──────────────────────────────────────────────────────────────

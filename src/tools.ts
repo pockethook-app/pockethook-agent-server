@@ -15,6 +15,7 @@ import { checkShellPermission, checkPathPermission } from "./permissions.js";
 import { createJob, listJobs, deleteJob, updateJobEnabled } from "./jobs.js";
 import type { Job } from "./jobs.js";
 import { startServer, stopServer, listServers, getAvailableTunnels } from "./servers.js";
+import { getCustomTools } from "./custom-tools.js";
 import { commitWorkspace, backupConfigFile, backupSkills, configPaths } from "./versioning.js";
 import type { Config } from "./config.js";
 import { logger } from "./logger.js";
@@ -149,7 +150,7 @@ function createWriteTool(cwd: string, perms: Permissions): AgentTool<typeof writ
         if (filePath === configPaths.agentInstructions || filePath === configPaths.permissions) {
           backupConfigFile(filePath);
         }
-        if (filePath.startsWith(configPaths.skillsDir)) {
+        if (filePath.startsWith(configPaths.skillsDir) || filePath.startsWith(configPaths.customToolsDir)) {
           backupSkills();
         }
 
@@ -648,6 +649,10 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
       logger.warn(`Unknown tool: ${name}`);
     }
   }
+
+  // Append custom tools (hot-reloaded from custom-tools/*.md)
+  const customTools = getCustomTools(cwd);
+  tools.push(...customTools);
 
   return tools;
 }

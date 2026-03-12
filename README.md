@@ -280,6 +280,35 @@ The agent uses `$PORT` as a placeholder in commands, which gets replaced with th
 
 Server tools: `start_server`, `stop_server`, `list_servers`. State is persisted in `data/servers.json`. Running servers are cleaned up when the main server stops.
 
+## Custom Tools
+
+The agent can install CLI tools and register them as new agent tools — extending its own capabilities without modifying the server code.
+
+When a user says *"install Playwright and take screenshots for me"*, the agent:
+1. Installs the dependency (`bun add playwright`)
+2. Creates a tool definition in `custom-tools/` (e.g., `web-screenshot.md`)
+3. The tool is available on the next request (hot-reloaded)
+
+Tool definitions are `.md` files with a simple format:
+
+```markdown
+### Web Screenshot
+
+Tool name: `web_screenshot`
+
+Take a screenshot of a web page using Playwright.
+
+Install: `bun add playwright && bunx playwright install chromium`
+
+Command: `bunx playwright screenshot $url $output`
+
+Parameters:
+- url (string, required): URL to screenshot
+- output (string, optional): Output file path. Default: workspace/screenshot.png
+```
+
+Custom tools follow the same hot-reload pattern as skills. The agent can create, edit, and delete them. Dependencies are installed automatically on first use.
+
 ## Permissions
 
 Granular tool permissions are stored in `permissions.json` (configure via `bun run permissions` or `bun run setup`):
@@ -321,6 +350,7 @@ flowmate-agent-server/
 │   ├── dashboard.ts      # Web dashboard HTML and jobs API
 │   ├── llm.ts            # Agent execution, LLM communication
 │   ├── tools.ts          # Tool implementations (shell, read, write, ls, jobs, servers)
+│   ├── custom-tools.ts   # Custom tool loader (hot-reload from custom-tools/*.md)
 │   ├── servers.ts        # Dev server process manager (start/stop/list, tunnel)
 │   ├── versioning.ts     # Workspace git + config backups
 │   ├── jobs.ts           # Background job system, cron scheduler
@@ -334,6 +364,7 @@ flowmate-agent-server/
 │   ├── tunnel.ts         # HTTPS tunnel setup
 │   └── dev-tunnel.ts     # Combined dev server + tunnel
 ├── skills/               # Hot-reloadable shortcut definitions
+├── custom-tools/         # Hot-reloadable custom tool definitions
 ├── data/                 # Runtime data (SQLite, service metadata, backups)
 ├── workspace/            # Agent's working directory
 │   └── dashboard/        # Custom dashboard files (hot-reloaded)
