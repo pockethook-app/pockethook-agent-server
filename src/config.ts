@@ -32,11 +32,11 @@ export interface Config {
 
 function buildBaseSystemPrompt(agentName: string): string {
   const shortcutsDir = join(PROJECT_ROOT, "skills");
-  return `Your name is ${agentName}. You are a helpful AI assistant integrated with FlowMate, an iOS automation app.
+  return `Your name is ${agentName}. You are a helpful AI assistant integrated with PocketHook, an iOS automation app.
 
 You have access to tools for interacting with the server (shell, read, write, ls) and a special "respond" tool to send your final answer.
 
-IMPORTANT: You MUST always call the "respond" tool to deliver your response. This is the only way to send messages to the FlowMate app.
+IMPORTANT: You MUST always call the "respond" tool to deliver your response. This is the only way to send messages to the PocketHook app.
 
 ## respond tool format
 
@@ -53,7 +53,7 @@ Each step has:
 - Keep "msg" as a short status message for the user. Put the actual payload in "data".
 - If the user asks to run a specific shortcut not in the available list, tell them it's not configured and show what IS available.
 - **Web research**: When the user asks to search, find information, compare products, look something up, etc., use the \`web_search\` tool to find relevant results, then use \`web_fetch\` to read the most promising pages. Summarize the findings in your response and include relevant URLs using the "url" field. Do NOT just return a Google search URL — actually research and provide useful information.
-- If the user explicitly asks to open a specific website or URL, use the "url" field directly. FlowMate will open it on the user's device.
+- If the user explicitly asks to open a specific website or URL, use the "url" field directly. PocketHook will open it on the user's device.
 - You can combine msg + url (e.g., show a summary and provide the link) or msg + shortcut + data (trigger automation).
 - ALWAYS respond in the same language the user is using.
 - **Long tasks → background jobs**: If a task will take significant time, do NOT make the user wait. Instead create a background job and respond immediately. This includes:
@@ -171,7 +171,7 @@ You have tools to manage dev servers for workspace projects: \`start_server\`, \
 ### Important
 - Always include \`--bind 0.0.0.0\` or \`--host\` flags when available, so the server is accessible from the network (needed for tunnels).
 - After starting, report the local URL (and tunnel URL if applicable) to the user.
-- If the user asks about running servers or active services, you can use shell commands to scan the system for a full picture. But ALWAYS also call \`list_servers\` to know which ones you started. When reporting, clearly distinguish between servers you manage (from \`list_servers\`) and other services running on the system that you didn't start. Note: flowmate-agent-server (this server, typically on port ${process.env.PORT || "3000"}) is YOU — don't report it as a separate service, it's the server you're running on.
+- If the user asks about running servers or active services, you can use shell commands to scan the system for a full picture. But ALWAYS also call \`list_servers\` to know which ones you started. When reporting, clearly distinguish between servers you manage (from \`list_servers\`) and other services running on the system that you didn't start. Note: pockethook-agent-server (this server, typically on port ${process.env.PORT || "3000"}) is YOU — don't report it as a separate service, it's the server you're running on.
 
 ## Examples
 
@@ -353,7 +353,7 @@ export function loadConfig(): Config {
   return {
     port: Number(process.env.PORT) || 3000,
     authToken: requireEnv("AUTH_TOKEN"),
-    agentName: process.env.AGENT_NAME || "FlowMate Assistant",
+    agentName: process.env.AGENT_NAME || "PocketHook Assistant",
     llmApiKey: process.env.LLM_PROVIDER === "ollama"
       ? (process.env.LLM_API_KEY || "ollama")
       : requireEnv("LLM_API_KEY"),

@@ -62,7 +62,7 @@ export function initWorkspaceGit(): boolean {
       execSync('git commit --allow-empty -m "init: workspace created"', {
         cwd: WORKSPACE_DIR,
         stdio: "ignore",
-        env: { ...process.env, GIT_AUTHOR_NAME: "FlowMate", GIT_AUTHOR_EMAIL: "agent@flowmate", GIT_COMMITTER_NAME: "FlowMate", GIT_COMMITTER_EMAIL: "agent@flowmate" },
+        env: { ...process.env, GIT_AUTHOR_NAME: "PocketHook", GIT_AUTHOR_EMAIL: "agent@pockethook", GIT_COMMITTER_NAME: "PocketHook", GIT_COMMITTER_EMAIL: "agent@pockethook" },
       });
       logger.info("Workspace git repo initialized");
     }
@@ -90,7 +90,7 @@ export function commitWorkspace(message: string): boolean {
     execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, {
       cwd: WORKSPACE_DIR,
       stdio: "ignore",
-      env: { ...process.env, GIT_AUTHOR_NAME: "FlowMate", GIT_AUTHOR_EMAIL: "agent@flowmate", GIT_COMMITTER_NAME: "FlowMate", GIT_COMMITTER_EMAIL: "agent@flowmate" },
+      env: { ...process.env, GIT_AUTHOR_NAME: "PocketHook", GIT_AUTHOR_EMAIL: "agent@pockethook", GIT_COMMITTER_NAME: "PocketHook", GIT_COMMITTER_EMAIL: "agent@pockethook" },
     });
     return true;
   } catch {
@@ -114,7 +114,7 @@ export function revertLastWorkspaceCommit(): string | null {
     execSync("git revert HEAD --no-edit", {
       cwd: WORKSPACE_DIR,
       stdio: "ignore",
-      env: { ...process.env, GIT_AUTHOR_NAME: "FlowMate", GIT_AUTHOR_EMAIL: "agent@flowmate", GIT_COMMITTER_NAME: "FlowMate", GIT_COMMITTER_EMAIL: "agent@flowmate" },
+      env: { ...process.env, GIT_AUTHOR_NAME: "PocketHook", GIT_AUTHOR_EMAIL: "agent@pockethook", GIT_COMMITTER_NAME: "PocketHook", GIT_COMMITTER_EMAIL: "agent@pockethook" },
     });
     return lastMsg;
   } catch {

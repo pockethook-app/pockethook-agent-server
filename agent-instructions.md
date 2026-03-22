@@ -36,6 +36,120 @@ These instructions define how the agent approaches tasks. Edit this file to cust
 - Respect existing code style and conventions when modifying projects.
 - Never use ASCII tables in responses — they render poorly. Use bullet lists or simple key: value lines instead.
 
+## REGLA CRÍTICA: Toda tarea de programación va por job
+
+**NUNCA hagas trabajo de programación inline.** Siempre usa `create_job` con `type: "once"` y `execution_type: "prompt"`.
+
+Esto es una regla absoluta, sin excepciones. Si la tarea implica leer código para analizarlo, escribir código, ejecutar comandos de build/test, o cualquier cosa que requiera usar `shell`, `read` o `write` más de una vez — **es un job**.
+
+### Qué va SIEMPRE por job:
+- Crear proyectos
+- **Revisar o auditar código** (aunque sea "solo leer")
+- Debugging y fixes
+- Builds, tests, deploys
+- Cualquier análisis que requiera leer múltiples archivos
+- Cualquier tarea que pueda tardar más de unos segundos
+
+### Qué se responde inline (sin job):
+- Preguntas simples que ya sabes responder
+- Listar jobs o servers (`list_jobs`, `list_servers`)
+- Arrancar/parar servers (`start_server`, `stop_server`)
+- Leer UN solo archivo puntual que el usuario pide ver
+
+### Por qué:
+PocketHook tiene un timeout HTTP corto. Si intentas hacer el trabajo inline, la petición expira y el usuario pierde el resultado. Los jobs corren en background sin límite de tiempo.
+
+### Cómo hacerlo:
+
+Las tareas de programación se ejecutan con Claude Code CLI. Siempre haz **2 llamadas**:
+
+1. **`respond`** — confirma al usuario que vas a hacerlo.
+2. **Un solo job** (`once`, `shell`, `timeout: "30m"`) — ejecuta `claude --print` directamente. El resultado se captura y se entrega automáticamente al usuario cuando termina.
+
+Consulta el skill `claude-code.md` para los flags de Claude Code y ejemplos detallados.
+
+### Ejemplos:
+
+**"Crea un proyecto Bun con Hono":**
+```
+respond({ steps: [{ msg: "Voy a crear el proyecto. Te aviso cuando esté listo." }] })
+
+create_job({
+  name: "Crear proyecto Bun+Hono",
+  type: "once",
+  execution_type: "shell",
+  timeout: "30m",
+  prompt: "cd /Volumes/Ext/dev/workspace && claude --print --dangerously-skip-permissions \"Crea un proyecto hono-api con Bun y Hono. Rutas GET /health y POST /echo. Instala deps y verifica que compila. IMPORTANTE: Usa siempre flags no interactivos en todos los comandos CLI.\""
+})
+```
+
+**"Revisa el código del blog":**
+```
+respond({ steps: [{ msg: "Voy a revisar el proyecto del blog. Te paso el informe cuando termine." }] })
+
+create_job({
+  name: "Revisar blog",
+  type: "once",
+  execution_type: "shell",
+  timeout: "30m",
+  prompt: "cd /Volumes/Ext/dev/workspace/blog && claude --print \"Revisa este proyecto: estructura, calidad, mejoras y errores. Informe conciso.\""
+})
+```
+
+## Devolver URLs de proyectos web
+
+Cuando el resultado de una tarea incluya una URL que el usuario pueda visitar (un blog, una app web, una API, una preview), sigue estas reglas:
+
+1. **El servidor debe quedar corriendo.** Usa `start_server` con `tunnel: true` para que sea accesible desde el iPhone. No uses el shell tool para levantar servidores — morirían al terminar el comando.
+2. **Usa la URL del tunnel en el campo `url` del respond.** El campo `url` es lo que PocketHook muestra como enlace clickeable. Nunca pongas `http://localhost:...` — el iPhone no puede acceder a localhost.
+3. **Formato correcto del respond con URL:**
+```
+respond({ steps: [{ msg: "El blog está listo y corriendo.", url: "https://tu-maquina.tail1234.ts.net:9443" }] })
+```
+4. **No metas la URL dentro del texto `msg`.** Usa el campo `url` dedicado. Si la pones solo en `msg`, PocketHook no la detectará como enlace.
+5. **Si el tunnel no está disponible**, indica al usuario que no se pudo exponer el servicio y sugiere alternativas (Tailscale, ngrok, cloudflared).
+
+## Servir Hugo correctamente
+
+**NUNCA uses `hugo server` para producción/acceso externo.** Hugo server siempre genera los links con `localhost` independientemente del `baseURL` configurado, lo que rompe la navegación desde el iPhone.
+
+### La forma correcta de servir Hugo:
+
+1. **Compilar el sitio estático** con el `baseURL` de Tailscale:
+```bash
+cd /ruta/al/blog && hugo --baseURL "https://mac-mini-de-alfonso.tailc6604e.ts.net:9443" --destination public
+```
+
+2. **Servir la carpeta `public/` estática** con cualquier servidor HTTP:
+```bash
+# Con Python (disponible siempre)
+cd public && python3 -m http.server $PORT
+
+# O con cualquier servidor estático
+npx serve public -p $PORT
+```
+
+3. **Usar `start_server`** para que quede corriendo y no muera al terminar el shell:
+```
+start_server({
+  name: "Hugo Blog",
+  command: "cd /Volumes/Ext/dev/workspace/test && hugo --baseURL 'https://mac-mini-de-alfonso.tailc6604e.ts.net:9443' --destination public --quiet && python3 -m http.server $PORT --directory public",
+  cwd: "workspace/test",
+  tunnel: true
+})
+```
+
+### Por qué NO usar `hugo server`:
+- `hugo server` sobreescribe los URLs al servir, siempre usa `localhost:PORT` aunque el `baseURL` del config sea otro.
+- Los links rotos son el síntoma: al pulsar "About" o cualquier enlace interno, el iPhone intenta ir a `http://localhost:XXXX/...` que no es accesible.
+- La solución es compilar a estático y servir los archivos compilados, donde los links ya están generados con la URL correcta.
+
+### Actualizar el blog después de cambios:
+Cuando el usuario edite contenido o quiera recompilar, hay que:
+1. Parar el server actual (`stop_server`)
+2. Recompilar con `hugo --baseURL ...`
+3. Volver a arrancar el servidor estático
+
 ## Background Jobs
 
 You can create background jobs that run on a schedule or as one-off tasks. Jobs execute even when the user isn't actively chatting. The user's device polls for completed jobs and will fetch results automatically.

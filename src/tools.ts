@@ -38,7 +38,7 @@ function denied(reason: string): AgentToolResult<unknown> {
 
 const shellSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
-  timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 30)" })),
+  timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 300)" })),
 });
 
 function createShellTool(cwd: string, perms: Permissions): AgentTool<typeof shellSchema> {
@@ -51,7 +51,7 @@ function createShellTool(cwd: string, perms: Permissions): AgentTool<typeof shel
       const check = checkShellPermission(params.command, perms);
       if (!check.allowed) return denied(check.reason!);
 
-      const timeout = (params.timeout ?? 30) * 1000;
+      const timeout = (params.timeout ?? 300) * 1000;
       return new Promise<AgentToolResult<unknown>>((res) => {
         let output = "";
         const child = spawn("bash", ["-c", params.command], {
@@ -219,7 +219,7 @@ function createLsTool(cwd: string, perms: Permissions): AgentTool<typeof lsSchem
   };
 }
 
-// ── FlowMate respond tool ───────────────────────────────────────────────
+// ── PocketHook respond tool ──────────────────────────────────────────────
 
 const respondStepSchema = Type.Object({
   msg: Type.String({ description: "Message to display to the user" }),
@@ -235,7 +235,7 @@ const respondSchema = Type.Object({
   }),
 });
 
-export interface FlowMateResponse {
+export interface PocketHookResponse {
   msg: string;
   shortcut?: string;
   data?: Record<string, unknown>;
@@ -243,15 +243,15 @@ export interface FlowMateResponse {
 }
 
 export function createRespondTool(
-  onRespond: (responses: FlowMateResponse[]) => void,
+  onRespond: (responses: PocketHookResponse[]) => void,
 ): AgentTool<typeof respondSchema> {
   return {
     name: "respond",
-    label: "Send response to FlowMate",
-    description: `Send the final response to the user's FlowMate iOS app. You MUST call this tool to deliver your response. Each step can include a message and optionally trigger an iOS Shortcut by name. Use multiple steps for sequential automations.`,
+    label: "Send response to PocketHook",
+    description: `Send the final response to the user's PocketHook iOS app. You MUST call this tool to deliver your response. Each step can include a message and optionally trigger an iOS Shortcut by name. Use multiple steps for sequential automations.`,
     parameters: respondSchema,
     async execute(_id, params) {
-      const responses: FlowMateResponse[] = params.steps.map((step) => ({
+      const responses: PocketHookResponse[] = params.steps.map((step) => ({
         msg: step.msg,
         shortcut: step.shortcut,
         data: step.data as Record<string, unknown> | undefined,
@@ -279,6 +279,8 @@ const createJobSchema = Type.Object({
     description: "shell = run as bash command (default), prompt = send to AI agent",
   })),
   delay: Type.Optional(Type.String({ description: "Delay before first run: '5m', '1h', etc. Default: immediate" })),
+  timeout: Type.Optional(Type.String({ description: "Max execution time for shell jobs. Use interval format: '5m', '30m', '1h'. Default: 60s. Set to '30m' or '1h' for long-running commands like Claude Code." })),
+  silent: Type.Optional(Type.Boolean({ description: "If true, the job won't trigger /jobs polling when it completes. Default: false" })),
   on_complete_shortcut: Type.Optional(Type.String({ description: "iOS Shortcut to trigger when the job completes (exact name). The shortcut receives the job output in the 'output' field of data." })),
   on_complete_data: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Extra data fields to pass to the shortcut on completion. The job output is automatically added as 'output'." })),
 });
@@ -298,6 +300,8 @@ function createCreateJobTool(): AgentTool<typeof createJobSchema> {
           prompt: params.prompt,
           execution_type: params.execution_type ?? "shell",
           delay: params.delay,
+          timeout: params.timeout,
+          silent: params.silent,
           on_complete_shortcut: params.on_complete_shortcut,
           on_complete_data: params.on_complete_data as Record<string, unknown> | undefined,
         });

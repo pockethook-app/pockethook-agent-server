@@ -150,7 +150,7 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>FlowMate Dashboard</title>
+<title>PocketHook Dashboard</title>
 <style>
   :root {
     --bg: #0f1d1d;
@@ -371,7 +371,7 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <h1>FlowMate</h1>
+  <h1>PocketHook</h1>
   <p class="subtitle">Agent Server Dashboard</p>
 
   <div class="stats" id="stats"></div>

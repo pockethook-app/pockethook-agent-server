@@ -4,7 +4,7 @@ import type { AssistantMessage, Model, Api, Message } from "@mariozechner/pi-ai"
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Config } from "./config.js";
 import { updateEnvFile } from "./config.js";
-import { createRespondTool, type FlowMateResponse } from "./tools.js";
+import { createRespondTool, type PocketHookResponse } from "./tools.js";
 import { logger } from "./logger.js";
 
 /**
@@ -102,14 +102,14 @@ async function ensureFreshApiKey(config: Config): Promise<string> {
 }
 
 /**
- * Run the agent with tools. Returns FlowMate-formatted responses.
+ * Run the agent with tools. Returns PocketHook-formatted responses.
  */
 export async function chat(
   config: Config,
   systemPrompt: string,
   messages: Message[],
   tools: AgentTool<any>[],
-): Promise<FlowMateResponse[]> {
+): Promise<PocketHookResponse[]> {
   if (!cachedModel) {
     cachedModel = resolveModel(config);
     logger.info(`LLM resolved: ${cachedModel.provider}/${cachedModel.id} (api: ${cachedModel.api})`);
@@ -118,9 +118,9 @@ export async function chat(
   const apiKey = await ensureFreshApiKey(config);
 
   // Capture the respond tool's output
-  let flowmateResponses: FlowMateResponse[] | null = null;
+  let pockethookResponses: PocketHookResponse[] | null = null;
   const respondTool = createRespondTool((responses) => {
-    flowmateResponses = responses;
+    pockethookResponses = responses;
   });
 
   const allTools = [...tools, respondTool];
@@ -151,8 +151,8 @@ export async function chat(
   await agent.prompt(userText);
 
   // If the LLM called respond tool, use that
-  if (flowmateResponses) {
-    return flowmateResponses;
+  if (pockethookResponses) {
+    return pockethookResponses;
   }
 
   // Fallback: extract text from the last assistant message

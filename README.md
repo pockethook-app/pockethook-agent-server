@@ -1,8 +1,8 @@
-# flowmate-agent-server
+# pockethook-agent-server
 
-AI agent server for [FlowMate](https://flow-mate.app) — connects any LLM provider to iOS Shortcuts via the FlowMate protocol.
+AI agent server for [PocketHook](https://pockethook.app) — connects any LLM provider to iOS Shortcuts via the PocketHook protocol.
 
-The server receives messages from FlowMate, processes them through an LLM with tool-calling capabilities, and returns structured responses that FlowMate executes as iOS Shortcuts on the user's device.
+The server receives messages from PocketHook, processes them through an LLM with tool-calling capabilities, and returns structured responses that PocketHook executes as iOS Shortcuts on the user's device.
 
 > **This is a starting point, not a finished product.** The server ships with a core set of tools (shell, files, web search, background jobs) and is designed to be extended by you. Add your own integrations — email, calendars, documents, APIs, databases, whatever fits your workflow. Write new skills, adjust the agent instructions, wire up new tools. The goal is for you to make it yours.
 
@@ -21,12 +21,12 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and mul
 - **Long-term memory** — SQLite + FTS5 full-text search for context recall across sessions
 - **HTTPS tunneling** — Built-in support for Tailscale, ngrok, and Cloudflare Tunnel
 - **System service** — Install as a persistent service on macOS, Linux, or Windows
-- **FlowMate protocol** — Standard `msg`/`shortcut`/`data`/`url` response format via `@flow-mate/sdk`
+- **PocketHook protocol** — Standard `msg`/`shortcut`/`data`/`url` response format via `@pockethook/sdk`
 
 ## Requirements
 
 - [Bun](https://bun.sh) runtime
-- A FlowMate app instance configured to point to this server
+- A PocketHook app instance configured to point to this server
 - An API key or OAuth credentials for your chosen LLM provider
 - (Optional) [Tailscale](https://tailscale.com), [ngrok](https://ngrok.com), or [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) for HTTPS tunneling
 
@@ -71,12 +71,12 @@ All configuration is stored in `.env` (created by `bun run setup`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AUTH_TOKEN` | (required) | Shared secret with FlowMate app |
+| `AUTH_TOKEN` | (required) | Shared secret with PocketHook app |
 | `LLM_API_KEY` | (required) | LLM provider API key or OAuth token |
 | `LLM_PROVIDER` | `anthropic` | LLM provider name |
 | `LLM_MODEL` | `claude-sonnet-4-20250514` | Model ID |
 | `PORT` | `3000` | Server port |
-| `AGENT_NAME` | `FlowMate Assistant` | How the agent introduces itself |
+| `AGENT_NAME` | `PocketHook Assistant` | How the agent introduces itself |
 | `MAX_HISTORY` | `50` | Messages kept in short-term memory per session |
 | `SESSION_TTL_MINUTES` | `60` | Session expiration time |
 | `WORKING_DIR` | `workspace/` | Agent's restricted working directory |
@@ -147,15 +147,15 @@ Request body size is limited to 1 MB. Message length is limited to 10,000 charac
 
 ### `GET /health` — Health check
 
-Returns plain text `true` with status 200. Configure in FlowMate as the Health Check URL.
+Returns plain text `true` with status 200. Configure in PocketHook as the Health Check URL.
 
 ### `GET /jobs` — Jobs polling
 
-Returns `true` if there are completed job results pending delivery, `false` otherwise. Configure in FlowMate as the Polling URL. When FlowMate receives `true`, it sends the configured fetch message to trigger result delivery.
+Returns `true` if there are completed job results pending delivery, `false` otherwise. Configure in PocketHook as the Polling URL. When PocketHook receives `true`, it sends the configured fetch message to trigger result delivery.
 
 ## HTTPS Tunnel
 
-FlowMate requires HTTPS. The built-in tunnel tool auto-detects available tools and creates the tunnel:
+PocketHook requires HTTPS. The built-in tunnel tool auto-detects available tools and creates the tunnel:
 
 ```bash
 bun run tunnel
@@ -166,7 +166,7 @@ Supports:
 - **ngrok** — Generates a public URL, fetches it from the ngrok API
 - **Cloudflare Tunnel** — Quick tunnel with random URL
 
-The tunnel shows all URLs ready to copy into FlowMate Settings:
+The tunnel shows all URLs ready to copy into PocketHook Settings:
 
 ```
   Server URL:    https://your-host.ts.net:8443
@@ -188,11 +188,11 @@ During install, you can optionally configure the HTTPS tunnel (Tailscale recomme
 
 | Platform | Backend | Service location |
 |----------|---------|-----------------|
-| macOS | launchd | `~/Library/LaunchAgents/com.flowmate.agent-server.plist` |
-| Linux | systemd (user) | `~/.config/systemd/user/flowmate-agent-server.service` |
+| macOS | launchd | `~/Library/LaunchAgents/com.pockethook.agent-server.plist` |
+| Linux | systemd (user) | `~/.config/systemd/user/pockethook-agent-server.service` |
 | Windows | NSSM | Windows Service Manager |
 
-The service auto-restarts on failure. Logs on macOS go to `~/Library/Logs/flowmate-agent-server/`.
+The service auto-restarts on failure. Logs on macOS go to `~/Library/Logs/pockethook-agent-server/`.
 
 Manage the service:
 ```bash
@@ -250,7 +250,7 @@ Cron format: `minute hour day-of-month month day-of-week`
 ### Execution types
 
 - **shell** — Runs a bash command, captures stdout/stderr
-- **prompt** — Processed by the AI agent with full tool access, stores the complete FlowMate response (msg + shortcut + data + url)
+- **prompt** — Processed by the AI agent with full tool access, stores the complete PocketHook response (msg + shortcut + data + url)
 
 ### Delivery
 
@@ -343,7 +343,7 @@ SQLite with FTS5 full-text search for long-term memory (`data/memory.db`):
 ## Project structure
 
 ```
-flowmate-agent-server/
+pockethook-agent-server/
 ├── src/
 │   ├── index.ts          # HTTP server, routing, job delivery
 │   ├── config.ts         # Config loading, system prompt, hot-reload

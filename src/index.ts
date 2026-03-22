@@ -1,4 +1,4 @@
-import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "@flow-mate/sdk";
+import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "@pockethook/sdk";
 import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale } from "./config.js";
 import { chat } from "./llm.js";
 import { createTools } from "./tools.js";
@@ -54,7 +54,7 @@ if (config.locale) {
   });
 }
 
-// Chat function for prompt-type jobs — stores full FlowMate response as JSON
+// Chat function for prompt-type jobs — stores full PocketHook response as JSON
 const JOB_PREFIX = "[BACKGROUND JOB] You are running inside a background job. Do the work directly — do NOT create more jobs. Use web_search, web_fetch, shell, read, write tools directly to complete the task.\n\n";
 
 const jobChatFn = async (prompt: string): Promise<string> => {
@@ -157,7 +157,7 @@ Bun.serve({
       return new Response(message, { status: 400 });
     }
 
-    // Message length limit (10,000 chars — matches FlowMate app limit)
+    // Message length limit (10,000 chars — matches PocketHook app limit)
     if (chatInput.length > 10_000) {
       return new Response("Message too long (max 10,000 characters)", { status: 413 });
     }
@@ -171,7 +171,7 @@ Bun.serve({
 
       for (const j of undelivered) {
         if (j.status === "completed" && j.result) {
-          // Try to parse as FlowMate response JSON (from prompt-type jobs)
+          // Try to parse as PocketHook response JSON (from prompt-type jobs)
           try {
             const parsed = JSON.parse(j.result);
             if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].msg) {
@@ -224,10 +224,10 @@ Bun.serve({
     try {
       // Build context: recent messages + relevant memories from FTS5
       const messages = buildContext(sessionId, chatInput);
-      const flowmateResponses = await chat(config, getSystemPrompt(config.agentName), messages, tools);
+      const pockethookResponses = await chat(config, getSystemPrompt(config.agentName), messages, tools);
 
       // Store summary in session history
-      const summaryText = flowmateResponses.map((r) => r.msg).join("\n");
+      const summaryText = pockethookResponses.map((r) => r.msg).join("\n");
       addAssistantMessage(sessionId, {
         role: "assistant",
         content: [{ type: "text", text: summaryText }],
@@ -240,10 +240,10 @@ Bun.serve({
       });
       trimHistory(sessionId, config.maxHistory);
 
-      // Build FlowMate SDK response — pass all fields (msg, shortcut, data, url)
+      // Build PocketHook SDK response — pass all fields (msg, shortcut, data, url)
       return toResponse(
         responses(
-          flowmateResponses.map((r) => ({
+          pockethookResponses.map((r) => ({
             msg: r.msg,
             shortcut: r.shortcut,
             data: r.data,
@@ -260,7 +260,7 @@ Bun.serve({
 });
 
 const base = `http://localhost:${config.port}`;
-logger.info(`flowmate-agent-server running on ${base}`);
+logger.info(`pockethook-agent-server running on ${base}`);
 logger.info(`  POST ${base}/           → Chat`);
 logger.info(`  GET  ${base}/health     → Health check`);
 logger.info(`  GET  ${base}/jobs       → Jobs polling`);

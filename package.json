@@ -1,7 +1,7 @@
 {
-  "name": "flowmate-agent-server",
+  "name": "pockethook-agent-server",
   "version": "0.2.0",
-  "description": "FlowMate agent server with LLM integration via pi-ai",
+  "description": "PocketHook agent server with LLM integration via pi-ai",
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
-    "@flow-mate/sdk": "^0.1.0",
+    "@pockethook/sdk": "file:../flowmate-sdk",
     "@mariozechner/pi-agent-core": "^0.57.1",
     "@mariozechner/pi-ai": "^0.57.1",
     "open": "^11.0.0",

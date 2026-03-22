@@ -1,5 +1,5 @@
 /**
- * System service management for flowmate-agent-server.
+ * System service management for pockethook-agent-server.
  *
  * Supports macOS (launchd), Linux (systemd), and Windows (NSSM).
  * Commands: install, stop, restart, uninstall, status
@@ -92,7 +92,7 @@ function readEnvPort(): number {
 
 // ── macOS (launchd) ──────────────────────────────────────────────────────
 
-const LAUNCHD_LABEL = "com.flowmate.agent-server";
+const LAUNCHD_LABEL = "com.pockethook.agent-server";
 const LAUNCHD_PLIST = join(
   process.env.HOME || "~",
   "Library",
@@ -104,7 +104,7 @@ function getLogDir(): string {
   // Use ~/Library/Logs for macOS (always available, even for external drives)
   // Use DATA_DIR for other platforms
   if (PLATFORM === "darwin") {
-    const logDir = join(process.env.HOME || "~", "Library", "Logs", "flowmate-agent-server");
+    const logDir = join(process.env.HOME || "~", "Library", "Logs", "pockethook-agent-server");
     if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
     return logDir;
   }
@@ -195,7 +195,7 @@ function macStatus(): string {
 
 // ── Linux (systemd) ──────────────────────────────────────────────────────
 
-const SYSTEMD_NAME = "flowmate-agent-server";
+const SYSTEMD_NAME = "pockethook-agent-server";
 const SYSTEMD_USER_DIR = join(process.env.HOME || "~", ".config", "systemd", "user");
 const SYSTEMD_UNIT = join(SYSTEMD_USER_DIR, `${SYSTEMD_NAME}.service`);
 
@@ -204,7 +204,7 @@ function generateSystemdUnit(): string {
   const indexPath = join(PROJECT_ROOT, "src", "index.ts");
 
   return `[Unit]
-Description=FlowMate Agent Server
+Description=PocketHook Agent Server
 After=network.target
 
 [Service]
@@ -266,7 +266,7 @@ function linuxStatus(): string {
 
 // ── Windows (NSSM) ──────────────────────────────────────────────────────
 
-const NSSM_NAME = "FlowMateAgentServer";
+const NSSM_NAME = "PocketHookAgentServer";
 
 function winInstall(): void {
   if (!commandExists("nssm")) {
@@ -325,7 +325,7 @@ interface TunnelConfig {
 
 async function setupTunnel(serverPort: number): Promise<TunnelConfig | null> {
   const wantTunnel = await p.confirm({
-    message: "Enable HTTPS tunnel? (required for FlowMate app)",
+    message: "Enable HTTPS tunnel? (required for PocketHook app)",
     initialValue: true,
   });
   if (p.isCancel(wantTunnel)) cancelled();

@@ -17,18 +17,18 @@ const ENV_PATH = join(PROJECT_ROOT, ".env");
 
 // ── Banner ───────────────────────────────────────────────────────────────
 
-// FlowMate brand colors (teal)
+// PocketHook brand colors (teal)
 const teal = (s: string) => `\x1b[38;2;0;128;128m${s}\x1b[0m`;
 const tealDim = (s: string) => `\x1b[38;2;0;100;100m${s}\x1b[0m`;
 
 const BANNER = `
-${teal(`  ███████╗██╗      ██████╗ ██╗    ██╗███╗   ███╗ █████╗ ████████╗███████╗
-  ██╔════╝██║     ██╔═══██╗██║    ██║████╗ ████║██╔══██╗╚══██╔══╝██╔════╝
-  █████╗  ██║     ██║   ██║██║ █╗ ██║██╔████╔██║███████║   ██║   █████╗
-  ██╔══╝  ██║     ██║   ██║██║███╗██║██║╚██╔╝██║██╔══██║   ██║   ██╔══╝
-  ██║     ███████╗╚██████╔╝╚███╔███╔╝██║ ╚═╝ ██║██║  ██║   ██║   ███████╗
-  ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝ ╚═╝     ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝`)}
-${tealDim("                         agent server")}
+${teal(`  ██████╗  ██████╗  ██████╗██╗  ██╗███████╗████████╗██╗  ██╗ ██████╗  ██████╗ ██╗  ██╗
+  ██╔══██╗██╔═══██╗██╔════╝██║ ██╔╝██╔════╝╚══██╔══╝██║  ██║██╔═══██╗██╔═══██╗██║ ██╔╝
+  ██████╔╝██║   ██║██║     █████╔╝ █████╗     ██║   ███████║██║   ██║██║   ██║█████╔╝
+  ██╔═══╝ ██║   ██║██║     ██╔═██╗ ██╔══╝     ██║   ██╔══██║██║   ██║██║   ██║██╔═██╗
+  ██║     ╚██████╔╝╚██████╗██║  ██╗███████╗   ██║   ██║  ██║╚██████╔╝╚██████╔╝██║  ██╗
+  ╚═╝      ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝`)}
+${tealDim("                              agent server")}
 `;
 
 // ── Env helpers ──────────────────────────────────────────────────────────
@@ -211,14 +211,14 @@ async function setup() {
   const agentName = await p.text({
     message: "Agent name",
     placeholder: "How the assistant introduces itself",
-    initialValue: env.AGENT_NAME || "FlowMate Assistant",
+    initialValue: env.AGENT_NAME || "PocketHook Assistant",
   });
   if (p.isCancel(agentName)) cancelled();
   env.AGENT_NAME = agentName;
 
   const authToken = await p.text({
-    message: "FlowMate auth token",
-    placeholder: "Shared secret between FlowMate app and this server",
+    message: "PocketHook auth token",
+    placeholder: "Shared secret between PocketHook app and this server",
     initialValue: env.AUTH_TOKEN,
     validate: (v) => (!v ? "Auth token is required" : undefined),
   });
@@ -244,7 +244,7 @@ async function setup() {
   env.PORT = port;
 
   const fetchMessage = await p.text({
-    message: "Fetch message (must match FlowMate app setting)",
+    message: "Fetch message (must match PocketHook app setting)",
     initialValue: env.FETCH_MESSAGE || "fetchPendingTasks",
   });
   if (p.isCancel(fetchMessage)) cancelled();

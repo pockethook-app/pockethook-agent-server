@@ -1,5 +1,5 @@
 /**
- * HTTPS tunnel setup for FlowMate agent server.
+ * HTTPS tunnel setup for PocketHook agent server.
  *
  * Auto-detects available tunnel tools (Tailscale, ngrok, Cloudflare Tunnel)
  * and creates an HTTPS endpoint for the server.
@@ -27,9 +27,9 @@ function printTunnelUrls(url: string, extra?: string): void {
     console.log(`  ${pc.bold("Dashboard:")}    ${pc.green(`${url}/dashboard`)}`);
   }
   console.log("");
-  console.log(`  ${pc.dim("Copy the Server URL to FlowMate Settings → Server URL")}`);
-  console.log(`  ${pc.dim("Copy the Health check URL to FlowMate Settings → Health Check URL")}`);
-  console.log(`  ${pc.dim("Copy the Jobs polling URL to FlowMate Settings → Polling URL")}`);
+  console.log(`  ${pc.dim("Copy the Server URL to PocketHook Settings → Server URL")}`);
+  console.log(`  ${pc.dim("Copy the Health check URL to PocketHook Settings → Health Check URL")}`);
+  console.log(`  ${pc.dim("Copy the Jobs polling URL to PocketHook Settings → Polling URL")}`);
   if (extra) {
     console.log("");
     console.log(`  ${pc.dim(extra)}`);
@@ -265,7 +265,7 @@ const providers: TunnelProvider[] = [
 
 async function main() {
   console.log("");
-  p.intro(pc.bold("FlowMate HTTPS Tunnel"));
+  p.intro(pc.bold("PocketHook HTTPS Tunnel"));
 
   const available = providers.filter((prov) => prov.detect());
 

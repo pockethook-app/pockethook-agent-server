@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — 2026-03-22
+
+### Rename
+
+- Renamed project from FlowMate to PocketHook across the entire codebase.
+
 ## 0.2.0 — 2026-03-11
 
 Pre-launch hardening.
@@ -31,7 +37,7 @@ Initial release.
 - Multi-provider LLM support via `@mariozechner/pi-ai` (Anthropic, OpenAI, OpenAI Codex, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter)
 - OAuth authentication for GitHub Copilot and OpenAI Codex with auto-refresh
 - Agent tools: shell, read, write, ls
-- FlowMate protocol integration via `@flow-mate/sdk`
+- PocketHook protocol integration via `@pockethook/sdk`
 - Hot-reloadable skill definitions from `skills/` directory
 - Self-managing skills — the agent can create, edit, and delete skill files
 - Long-term memory with SQLite + FTS5 full-text search
