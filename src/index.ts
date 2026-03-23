@@ -1,4 +1,4 @@
-import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "@pockethook/sdk";
+import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "pockethook-sdk";
 import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale } from "./config.js";
 import { chat } from "./llm.js";
 import { createTools } from "./tools.js";

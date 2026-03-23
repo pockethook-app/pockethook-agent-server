@@ -207,23 +207,28 @@ export function startServer(opts: StartServerOptions): ServerEntry {
     processes.set(state.nextId, child);
   }
 
-  // Capture initial output for debugging
+  // Capture output for diagnostics (capped to avoid unbounded memory)
+  const MAX_LOG = 50_000;
   let startupOutput = "";
-  const captureTimeout = setTimeout(() => {
-    child.stdout?.removeAllListeners("data");
-    child.stderr?.removeAllListeners("data");
-  }, 5000);
 
-  child.stdout?.on("data", (d: Buffer) => { startupOutput += d.toString(); });
-  child.stderr?.on("data", (d: Buffer) => { startupOutput += d.toString(); });
+  const appendOutput = (d: Buffer) => {
+    if (startupOutput.length < MAX_LOG) {
+      startupOutput += d.toString().slice(0, MAX_LOG - startupOutput.length);
+    }
+  };
+
+  child.stdout?.on("data", appendOutput);
+  child.stderr?.on("data", appendOutput);
+
+  // Capture serverId before `entry` is declared to avoid reference error
+  const serverId = state.nextId;
 
   child.on("close", (code) => {
-    clearTimeout(captureTimeout);
     if (code !== null && code !== 0) {
       logger.warn(`Server "${opts.name}" exited with code ${code}`, { output: startupOutput.slice(0, 500) });
     }
     // Remove from processes map
-    processes.delete(entry.id);
+    processes.delete(serverId);
   });
 
   // Setup tunnel if requested

@@ -48,6 +48,8 @@ export interface CreateJobOptions {
   prompt: string;
   execution_type?: "prompt" | "shell";
   delay?: string;
+  timeout?: string;
+  silent?: boolean;
   on_complete_shortcut?: string;
   on_complete_data?: Record<string, unknown>;
 }
@@ -84,7 +86,9 @@ function getDb(): Database {
       delivered INTEGER NOT NULL DEFAULT 0,
       enabled INTEGER NOT NULL DEFAULT 1,
       on_complete_shortcut TEXT,
-      on_complete_data TEXT
+      on_complete_data TEXT,
+      silent INTEGER NOT NULL DEFAULT 0,
+      timeout_ms INTEGER
     )
   `);
 
@@ -92,6 +96,8 @@ function getDb(): Database {
   try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_shortcut TEXT"); } catch {}
   try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_data TEXT"); } catch {}
   try { db.run("ALTER TABLE jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE jobs ADD COLUMN silent INTEGER NOT NULL DEFAULT 0"); } catch {}
+  try { db.run("ALTER TABLE jobs ADD COLUMN timeout_ms INTEGER"); } catch {}
 
   return db;
 }
@@ -324,11 +330,19 @@ export function createJob(opts: CreateJobOptions): Job {
   const executionType = opts.execution_type ?? "shell";
 
   const onCompleteData = opts.on_complete_data ? JSON.stringify(opts.on_complete_data) : null;
+  const silent = opts.silent ? 1 : 0;
+
+  let timeoutMs: number | null = null;
+  if (opts.timeout) {
+    const ms = parseInterval(opts.timeout);
+    if (!ms) throw new Error(`Invalid timeout format: ${opts.timeout}. Use: 30s, 5m, 1h, 1d`);
+    timeoutMs = ms;
+  }
 
   const result = d.run(
-    `INSERT INTO jobs (name, type, schedule, prompt, execution_type, status, created_at, next_run_at, on_complete_shortcut, on_complete_data)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
-    [opts.name, opts.type, opts.schedule ?? null, opts.prompt, executionType, now, nextRunAt, opts.on_complete_shortcut ?? null, onCompleteData],
+    `INSERT INTO jobs (name, type, schedule, prompt, execution_type, status, created_at, next_run_at, on_complete_shortcut, on_complete_data, silent, timeout_ms)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
+    [opts.name, opts.type, opts.schedule ?? null, opts.prompt, executionType, now, nextRunAt, opts.on_complete_shortcut ?? null, onCompleteData, silent, timeoutMs],
   );
 
   return getJob(Number(result.lastInsertRowid))!;
@@ -459,7 +473,8 @@ async function schedulerTick(): Promise<void> {
       let ok: boolean;
 
       if (job.execution_type === "shell") {
-        const result = await executeShell(job.prompt, schedulerConfig.workingDir);
+        const jobTimeout = (job as any).timeout_ms ?? 60_000;
+        const result = await executeShell(job.prompt, schedulerConfig.workingDir, jobTimeout);
         output = result.output;
         ok = result.ok;
       } else if (job.execution_type === "prompt" && schedulerConfig.chatFn) {
@@ -484,20 +499,22 @@ async function schedulerTick(): Promise<void> {
       }
 
       const resultField = ok ? "result" : "error";
+      // Silent jobs are auto-delivered so they don't trigger /jobs polling
+      const deliveredFlag = (job as any).silent ? 1 : 0;
 
       if (job.type === "cron" && job.schedule) {
         // Reschedule cron job
         const nextRun = nextRunFromSchedule(job.schedule, new Date(completedAt));
         if (nextRun) {
           d.run(
-            `UPDATE jobs SET status = 'pending', ${resultField} = ?, completed_at = ?, next_run_at = ?, delivered = 0 WHERE id = ?`,
-            [output || null, completedAt, nextRun, job.id],
+            `UPDATE jobs SET status = 'pending', ${resultField} = ?, completed_at = ?, next_run_at = ?, delivered = ? WHERE id = ?`,
+            [output || null, completedAt, nextRun, deliveredFlag, job.id],
           );
         } else {
           // Schedule couldn't be resolved — mark as failed
           d.run(
-            "UPDATE jobs SET status = 'failed', error = ?, completed_at = ?, delivered = 0 WHERE id = ?",
-            ["Could not calculate next run time from schedule: " + job.schedule, completedAt, job.id],
+            "UPDATE jobs SET status = 'failed', error = ?, completed_at = ?, delivered = ? WHERE id = ?",
+            ["Could not calculate next run time from schedule: " + job.schedule, completedAt, deliveredFlag, job.id],
           );
         }
       } else if (!ok && job.type === "once" && (job as any).retries < MAX_RETRIES) {
@@ -512,8 +529,8 @@ async function schedulerTick(): Promise<void> {
         );
       } else {
         d.run(
-          `UPDATE jobs SET status = '${ok ? "completed" : "failed"}', ${resultField} = ?, completed_at = ?, delivered = 0 WHERE id = ?`,
-          [output || null, completedAt, job.id],
+          `UPDATE jobs SET status = '${ok ? "completed" : "failed"}', ${resultField} = ?, completed_at = ?, delivered = ? WHERE id = ?`,
+          [output || null, completedAt, deliveredFlag, job.id],
         );
       }
     } catch (err) {
