@@ -356,6 +356,8 @@ export function loadConfig(): Config {
     agentName: process.env.AGENT_NAME || "PocketHook Assistant",
     llmApiKey: process.env.LLM_PROVIDER === "ollama"
       ? (process.env.LLM_API_KEY || "ollama")
+      : process.env.LLM_PROVIDER === "lm-studio"
+      ? (process.env.LLM_API_KEY || "lm-studio")
       : requireEnv("LLM_API_KEY"),
     llmProvider: (process.env.LLM_PROVIDER || "anthropic") as Provider,
     llmModel: process.env.LLM_MODEL || "claude-sonnet-4-20250514",

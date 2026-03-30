@@ -70,6 +70,7 @@ const PROVIDERS = [
   { key: "xai", name: "xAI (Grok)", defaultModel: "grok-3-mini-fast", auth: "apikey" },
   { key: "openrouter", name: "OpenRouter", defaultModel: "anthropic/claude-sonnet-4", auth: "apikey" },
   { key: "ollama", name: "Ollama (local)", defaultModel: "llama3.2", auth: "none" },
+  { key: "lm-studio", name: "LM Studio (local)", defaultModel: "qwen3.5-4b-mlx", auth: "none" },
 ] as const;
 
 type ProviderEntry = (typeof PROVIDERS)[number];
@@ -157,12 +158,15 @@ async function selectProvider(env: Record<string, string>): Promise<ProviderEntr
 
 async function configureAuth(provider: ProviderEntry, env: Record<string, string>): Promise<void> {
   if (provider.auth === "none") {
-    env.LLM_API_KEY = "ollama";
+    env.LLM_API_KEY = provider.key === "lm-studio" ? "lm-studio" : "ollama";
     delete env.OAUTH_REFRESH_TOKEN;
     delete env.OAUTH_TOKEN_EXPIRES;
+    const defaultUrl = provider.key === "lm-studio"
+      ? "http://localhost:1234/v1"
+      : "http://localhost:11434/v1";
     const baseUrl = await p.text({
-      message: "Ollama base URL",
-      initialValue: env.LLM_BASE_URL || "http://localhost:11434/v1",
+      message: `${provider.name} base URL`,
+      initialValue: env.LLM_BASE_URL || defaultUrl,
     });
     if (p.isCancel(baseUrl)) cancelled();
     env.LLM_BASE_URL = baseUrl;
@@ -349,6 +353,7 @@ async function switchProvider() {
 
   writeEnv(env);
   p.outro(`${pc.green("Done!")} Restart the server to apply changes.`);
+  process.exit(0);
 }
 
 async function refreshToken() {

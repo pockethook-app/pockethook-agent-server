@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — 2026-03-30
+
+### Features
+
+- LM Studio support — run local LLMs via LM Studio with no API key needed (`LLM_BASE_URL` defaults to `http://localhost:1234/v1`)
+
 ## 0.2.1 — 2026-03-22
 
 ### Rename

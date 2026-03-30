@@ -10,7 +10,7 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and mul
 
 ## Features
 
-- **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter, Ollama
+- **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter, Ollama, LM Studio
 - **OAuth authentication** — GitHub Copilot and OpenAI Codex via device code / browser flow
 - **Agent tools** — Shell, file read/write, directory listing, background jobs, web search, web scraping, dev server management
 - **Background jobs** — Schedule one-time or recurring tasks with cron expressions
@@ -91,7 +91,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `LOCALE_COUNTRY` | (auto-detected) | User country for location-aware searches |
 | `LOCALE_CITY` | (auto-detected) | User city for regional context |
 | `LOCALE_TIMEZONE` | (auto-detected) | User timezone |
-| `LLM_BASE_URL` | — | Custom LLM API base URL (required for Ollama, optional for others) |
+| `LLM_BASE_URL` | — | Custom LLM API base URL (required for Ollama/LM Studio, optional for others) |
 | `TOOLS` | `all` | Enabled tools (see Permissions) |
 
 ### Supported providers
@@ -108,6 +108,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | xAI (Grok) | API key | `grok-3-mini-fast` |
 | OpenRouter | API key | `anthropic/claude-sonnet-4` |
 | Ollama (local) | None | `llama3.2` |
+| LM Studio (local) | None | `qwen3.5-4b-mlx` |
 
 ## API Endpoints
 

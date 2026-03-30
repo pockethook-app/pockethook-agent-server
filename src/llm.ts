@@ -34,10 +34,12 @@ function resolveModel(config: Config): Model<Api> {
     openrouter: "openai-completions",
     cerebras: "openai-completions",
     ollama: "openai-completions",
+    "lm-studio": "openai-completions",
   };
 
   const defaultBaseUrls: Record<string, string> = {
     ollama: "http://localhost:11434/v1",
+    "lm-studio": "http://localhost:1234/v1",
   };
 
   return {
@@ -49,7 +51,7 @@ function resolveModel(config: Config): Model<Api> {
     reasoning: false,
     input: ["text"] as ("text" | "image")[],
     maxTokens: 8192,
-    contextWindow: 128000,
+    contextWindow: (config.llmProvider === "ollama" || config.llmProvider === "lm-studio") ? 32768 : 128000,
     maxOutputTokens: 8192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     supportedInputs: ["text"],
