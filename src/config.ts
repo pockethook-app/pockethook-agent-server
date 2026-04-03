@@ -388,7 +388,7 @@ export async function autoDetectLocale(config: Config): Promise<void> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
-    const res = await fetch("http://ip-api.com/json/?fields=country,city,timezone", { signal: controller.signal });
+    const res = await fetch("https://ip-api.com/json/?fields=country,city,timezone", { signal: controller.signal });
     clearTimeout(timeout);
 
     if (!res.ok) return;

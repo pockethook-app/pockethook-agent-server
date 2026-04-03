@@ -14,7 +14,7 @@
     "list_servers"
   ],
   "shell": {
-    "blockedCommands": [],
+    "blockedCommands": ["shutdown", "reboot", "halt", "mkfs", "dd", "passwd", "chown", "chmod"],
     "blockedPatterns": [
       "sudo\\s+",
       "rm\\s+-rf\\s+/(?!\\w)",
