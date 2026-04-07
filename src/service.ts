@@ -136,7 +136,13 @@ function generatePlist(): string {
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>PathState</key>
+    <dict>
+      <key>${indexPath}</key>
+      <true/>
+    </dict>
+  </dict>
   <key>StandardOutPath</key>
   <string>${logOut}</string>
   <key>StandardErrorPath</key>
