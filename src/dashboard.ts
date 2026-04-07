@@ -153,23 +153,24 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
 <title>PocketHook Dashboard</title>
 <style>
   :root {
-    --bg: #0f1d1d;
-    --surface: #1a2f2f;
-    --border: #2D9B9B33;
-    --text: #f0f4f4;
-    --text-dim: #99f6e4;
-    --teal: #4dc4c4;
-    --teal-light: #99f6e4;
-    --teal-dim: #2D9B9B;
-    --secondary: #2dd4bf;
-    --green: #5eeae4;
+    --bg: #000000;
+    --surface: rgba(255, 255, 255, 0.06);
+    --surface-solid: #1a1a1a;
+    --border: rgba(255, 255, 255, 0.08);
+    --text: #f5f5f7;
+    --text-dim: rgba(255, 255, 255, 0.45);
+    --accent-green: #34d399;
+    --accent-blue: #60a5fa;
+    --gradient: linear-gradient(to right, #34d399, #60a5fa);
+    --green: #34d399;
     --red: #f87171;
     --yellow: #fbbf24;
-    --blue: #99f6e4;
+    --blue: #60a5fa;
+    --cyan: #67e8f9;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
     background: var(--bg);
     color: var(--text);
     padding: 20px;
@@ -179,13 +180,17 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
   h1 {
     font-size: 1.25rem;
     font-weight: 600;
-    color: var(--teal);
+    background: var(--gradient);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    width: fit-content;
     margin-bottom: 2px;
   }
   .subtitle {
     color: var(--text-dim);
     font-size: 0.8rem;
-    margin-bottom: 16px;
+    margin-bottom: 20px;
   }
   .stats {
     display: grid;
@@ -194,12 +199,13 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
     margin-bottom: 20px;
   }
   .stat {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 8px;
+    border: 1.5px solid transparent;
+    border-radius: 14px;
+    padding: 12px 8px;
     text-align: center;
-    box-shadow: 0 0 12px #2D9B9B15;
+    background:
+      linear-gradient(var(--surface-solid), var(--surface-solid)) padding-box,
+      linear-gradient(135deg, var(--accent-green), var(--accent-blue)) border-box;
   }
   .stat-value {
     font-size: 1.3rem;
@@ -210,6 +216,7 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
     color: var(--text-dim);
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    margin-top: 2px;
   }
   .refresh-bar {
     display: flex;
@@ -218,30 +225,35 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
     margin-bottom: 12px;
   }
   .refresh-btn {
-    background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1.5px solid transparent;
+    border-radius: 20px;
     color: var(--text);
-    padding: 6px 14px;
-    border-radius: 6px;
+    padding: 6px 16px;
     cursor: pointer;
     font-size: 0.85rem;
     -webkit-tap-highlight-color: transparent;
+    transition: transform 0.1s ease;
+    background:
+      linear-gradient(var(--surface-solid), var(--surface-solid)) padding-box,
+      linear-gradient(to right, var(--accent-green), var(--accent-blue)) border-box;
   }
-  .refresh-btn:active { border-color: var(--secondary); }
+  .refresh-btn:active { transform: scale(0.97); }
   .auto-label { font-size: 0.7rem; color: var(--text-dim); }
   .badge {
     display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
+    padding: 3px 10px;
+    border-radius: 10px;
     font-size: 0.7rem;
     font-weight: 600;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
   }
-  .badge-pending { background: #14b8a622; color: var(--blue); }
-  .badge-running { background: #fbbf2422; color: var(--yellow); }
-  .badge-completed { background: #2dd4bf22; color: var(--green); }
-  .badge-failed { background: #f8717122; color: var(--red); }
-  .badge-cron { background: #2D9B9B22; color: var(--secondary); border: 1px solid var(--teal-dim); }
-  .badge-once { background: #2D9B9B11; color: var(--text-dim); border: 1px solid var(--border); }
+  .badge-pending { background: rgba(96, 165, 250, 0.12); color: var(--blue); border: 1px solid rgba(96, 165, 250, 0.2); }
+  .badge-running { background: rgba(251, 191, 36, 0.12); color: var(--yellow); border: 1px solid rgba(251, 191, 36, 0.2); }
+  .badge-completed { background: rgba(52, 211, 153, 0.12); color: var(--green); border: 1px solid rgba(52, 211, 153, 0.2); }
+  .badge-failed { background: rgba(248, 113, 113, 0.12); color: var(--red); border: 1px solid rgba(248, 113, 113, 0.2); }
+  .badge-cron { background: rgba(103, 232, 249, 0.12); color: var(--cyan); border: 1px solid rgba(103, 232, 249, 0.2); }
+  .badge-once { background: rgba(255, 255, 255, 0.06); color: var(--text-dim); border: 1px solid var(--border); }
   .mono { font-family: "SF Mono", "Fira Code", ui-monospace, monospace; font-size: 0.75rem; }
   .dim { color: var(--text-dim); }
   .empty {
@@ -253,12 +265,13 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
 
   /* Mobile-first: card layout */
   .job-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    border: 1.5px solid transparent;
+    border-radius: 16px;
     padding: 14px;
     margin-bottom: 12px;
-    box-shadow: 0 0 16px #2D9B9B10;
+    background:
+      linear-gradient(var(--surface-solid), var(--surface-solid)) padding-box,
+      linear-gradient(135deg, var(--accent-green), var(--accent-blue)) border-box;
   }
   .job-header {
     display: flex;
@@ -302,8 +315,9 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
   .job-output {
     margin-top: 8px;
     padding: 8px 10px;
-    background: #182525;
-    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 10px;
+    border: 1px solid var(--border);
     font-family: ui-monospace, monospace;
     font-size: 0.75rem;
     word-break: break-word;
@@ -328,10 +342,9 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
       gap: 12px;
       margin-bottom: 24px;
     }
-    .stat { padding: 12px 16px; }
+    .stat { padding: 14px 16px; }
     .stat-value { font-size: 1.8rem; }
     .stat-label { font-size: 0.75rem; }
-    .refresh-btn:hover { border-color: var(--secondary); }
 
     .mobile-cards { display: none; }
     .desktop-table { display: block; }
@@ -339,10 +352,12 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
     table {
       width: 100%;
       border-collapse: collapse;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
+      border: 1.5px solid transparent;
+      border-radius: 16px;
       overflow: hidden;
+      background:
+        linear-gradient(var(--surface-solid), var(--surface-solid)) padding-box,
+        linear-gradient(135deg, var(--accent-green), var(--accent-blue)) border-box;
     }
     th {
       text-align: left;
@@ -351,7 +366,7 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--text-dim);
-      background: var(--bg);
+      background: rgba(0, 0, 0, 0.3);
       border-bottom: 1px solid var(--border);
     }
     td {
@@ -361,6 +376,7 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
       vertical-align: top;
     }
     tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
     .result-cell {
       max-width: 200px;
       overflow: hidden;
@@ -409,7 +425,7 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
       stat(running, "Running", "var(--yellow)") +
       stat(completed, "Completed", "var(--green)") +
       stat(failed, "Failed", "var(--red)") +
-      stat(cron, "Cron");
+      stat(cron, "Cron", "var(--cyan)");
 
     if (jobs.length === 0) {
       document.getElementById("content").innerHTML = '<p class="empty">No jobs yet.</p>';
