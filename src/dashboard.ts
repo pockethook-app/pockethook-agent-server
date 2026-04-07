@@ -155,7 +155,7 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
   :root {
     --bg: #000000;
     --surface: rgba(255, 255, 255, 0.06);
-    --surface-solid: #1a1a1a;
+    --surface-solid: #000000;
     --border: rgba(255, 255, 255, 0.08);
     --text: #f5f5f7;
     --text-dim: rgba(255, 255, 255, 0.45);
