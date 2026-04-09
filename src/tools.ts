@@ -224,7 +224,10 @@ function createLsTool(cwd: string, perms: Permissions): AgentTool<typeof lsSchem
 const respondStepSchema = Type.Object({
   msg: Type.String({ description: "Message to display to the user" }),
   shortcut: Type.Optional(Type.String({ description: "iOS Shortcut name to execute (exact name as configured on the device)" })),
-  data: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "JSON data to pass to the shortcut" })),
+  data: Type.Optional(Type.Union([
+    Type.Record(Type.String(), Type.Unknown()),
+    Type.Array(Type.Record(Type.String(), Type.Unknown())),
+  ], { description: "JSON data to pass to the shortcut (object or array of objects)" })),
   url: Type.Optional(Type.String({ description: "HTTPS URL to attach to the response" })),
 });
 
@@ -238,7 +241,7 @@ const respondSchema = Type.Object({
 export interface PocketHookResponse {
   msg: string;
   shortcut?: string;
-  data?: Record<string, unknown>;
+  data?: Record<string, unknown> | Record<string, unknown>[];
   url?: string;
 }
 
@@ -254,7 +257,7 @@ export function createRespondTool(
       const responses: PocketHookResponse[] = params.steps.map((step) => ({
         msg: step.msg,
         shortcut: step.shortcut,
-        data: step.data as Record<string, unknown> | undefined,
+        data: step.data as Record<string, unknown> | Record<string, unknown>[] | undefined,
         url: step.url,
       }));
       onRespond(responses);
