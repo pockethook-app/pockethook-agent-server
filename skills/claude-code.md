@@ -1,70 +1,70 @@
-### Claude Code — Herramienta de programación
+### Claude Code — Programming Tool
 
-Este skill NO es un shortcut de iOS. Es una instrucción para que el agente use Claude Code CLI (`claude`) como herramienta de programación dentro de jobs.
+This skill is NOT an iOS shortcut. It is an instruction for the agent to use Claude Code CLI (`claude`) as a programming tool inside background jobs.
 
-Cuando necesites realizar una tarea de programación compleja (crear proyectos, refactorizar, revisar código extenso, etc.), delega el trabajo a Claude Code ejecutándolo como un shell job con timeout largo.
+When you need to perform a complex programming task (creating projects, refactoring, reviewing large codebases, etc.), delegate the work to Claude Code by running it as a shell job with a long timeout.
 
 ---
 
-**Cómo usarlo:**
+**How to use:**
 
-Crea UN SOLO job `type: "once"`, `execution_type: "shell"` con `timeout: "30m"` (o más si la tarea es muy pesada). El job ejecuta `claude --print` directamente, captura el output, y se entrega al usuario cuando termina. Sin tmux, sin polling, sin complicaciones.
+Create a SINGLE job `type: "once"`, `execution_type: "shell"` with `timeout: "30m"` (or more for very heavy tasks). The job runs `claude --print` directly, captures the output, and delivers it to the user when finished. No tmux, no polling, no complications.
 
 ```
 create_job({
-  name: "Descripción de la tarea",
+  name: "Task description",
   type: "once",
   execution_type: "shell",
   timeout: "30m",
-  prompt: "cd /ruta/proyecto && claude --print --dangerously-skip-permissions \"Tu prompt aquí. IMPORTANTE: Usa siempre flags no interactivos en todos los comandos CLI.\""
+  prompt: "cd /path/to/project && claude --print --dangerously-skip-permissions \"Your prompt here. IMPORTANT: Always use non-interactive flags in all CLI commands.\""
 })
 ```
 
-El resultado se entrega automáticamente al usuario vía el polling de PocketHook cuando el job termina.
+The result is automatically delivered to the user via PocketHook polling when the job finishes.
 
 ---
 
-**Flags de Claude Code CLI:**
-- `--print` (`-p`): Modo no interactivo. Ejecuta el prompt y sale.
-- `--dangerously-skip-permissions`: Permite escribir archivos y ejecutar comandos sin confirmación. Necesario para tareas que modifican el filesystem.
-- `--model`: Especificar modelo.
-- `--max-turns`: Limitar turnos de herramientas.
+**Claude Code CLI flags:**
+- `--print` (`-p`): Non-interactive mode. Runs the prompt and exits.
+- `--dangerously-skip-permissions`: Allows writing files and running commands without confirmation. Required for tasks that modify the filesystem.
+- `--model`: Specify model.
+- `--max-turns`: Limit tool turns.
 
-**IMPORTANTE — Comandos no interactivos:**
-Claude Code corre sin terminal interactivo. El prompt que le pases DEBE indicar que use siempre flags no interactivos en cualquier herramienta CLI que ejecute. Por ejemplo:
-- `npx sv create` → NO (interactivo, se queda colgado). Usar `npx sv create my-app --template minimal --no-install` o equivalente con `--yes`/`-y`.
-- `npm init` → NO. Usar `npm init -y`.
-- `npx create-next-app` → Pasar todos los flags: `--yes --ts --app --src-dir --eslint`.
-- Cualquier CLI que pregunte opciones → buscar su flag `--yes`, `--no-interactive`, `--defaults` o similar.
+**IMPORTANT — Non-interactive commands:**
+Claude Code runs without an interactive terminal. The prompt you pass MUST instruct it to always use non-interactive flags in any CLI tool it runs. For example:
+- `npx sv create` → NO (interactive, hangs). Use `npx sv create my-app --template minimal --no-install` or equivalent with `--yes`/`-y`.
+- `npm init` → NO. Use `npm init -y`.
+- `npx create-next-app` → Pass all flags: `--yes --ts --app --src-dir --eslint`.
+- Any CLI that prompts for options → look for its `--yes`, `--no-interactive`, `--defaults` flag or similar.
 
-Incluye siempre en el prompt de Claude Code: **"IMPORTANTE: Usa siempre flags no interactivos (--yes, -y, --defaults, --no-interactive) en todos los comandos CLI. No puedes responder prompts interactivos."**
+Always include in the Claude Code prompt: **"IMPORTANT: Always use non-interactive flags (--yes, -y, --defaults, --no-interactive) in all CLI commands. You cannot respond to interactive prompts."**
 
-**Timeout:** Usa `timeout: "30m"` para tareas normales, `timeout: "1h"` para proyectos grandes. El default sin timeout es 60s (insuficiente para Claude Code).
+**Timeout:** Use `timeout: "30m"` for normal tasks, `timeout: "1h"` for large projects. The default without timeout is 60s (insufficient for Claude Code).
 
-**Cuándo usar Claude Code vs el propio agente:**
-- **Claude Code** (este skill): tareas de programación pesadas — crear proyectos, refactorizaciones, debugging complejo. Tiene mejor contexto de código, LSP, grep avanzado, edición precisa.
-- **Propio agente** (`execution_type: "prompt"`): tareas ligeras que solo leen unos archivos, o que necesitan tools de PocketHook (respond, start_server, etc.).
+**When to use Claude Code vs the agent itself:**
+- **Claude Code** (this skill): heavy programming tasks — creating projects, refactoring, complex debugging. Has better code context, LSP, advanced grep, precise editing.
+- **Agent itself** (`execution_type: "prompt"`): lightweight tasks that only read a few files, or that need PocketHook tools (respond, start_server, etc.).
 
 ---
 
-**Ejemplo — crear proyecto:**
+**Example — create project:**
 ```
 create_job({
-  name: "Crear API con Hono",
+  name: "Create API with Hono",
   type: "once",
   execution_type: "shell",
   timeout: "30m",
-  prompt: "cd /Volumes/Ext/dev/workspace && claude --print --dangerously-skip-permissions \"Crea un proyecto hono-api con Bun y Hono. Rutas GET /health y POST /echo. Instala deps y verifica que compila. IMPORTANTE: Usa siempre flags no interactivos en todos los comandos CLI.\""
+  prompt: "cd /Volumes/Ext/dev/workspace && claude --print --dangerously-skip-permissions \"Create a hono-api project with Bun and Hono. Routes GET /health and POST /echo. Install deps and verify it compiles. IMPORTANT: Always use non-interactive flags in all CLI commands.\""
 })
 ```
 
-**Ejemplo — revisar proyecto:**
+**Example — review project:**
 ```
 create_job({
-  name: "Revisar blog",
+  name: "Review blog",
   type: "once",
   execution_type: "shell",
   timeout: "30m",
-  prompt: "cd /Volumes/Ext/dev/workspace/blog && claude --print \"Revisa este proyecto: estructura, calidad, mejoras y errores. Informe conciso.\""
+  prompt: "cd /Volumes/Ext/dev/workspace/blog && claude --print \"Review this project: structure, quality, improvements and errors. Concise report.\""
 })
 ```

@@ -2,31 +2,31 @@
 
 Shortcut name: `claudeRemote`
 
-Abre una sesión remota interactiva de Claude Code dentro de una sesión **tmux** persistente. El usuario podrá conectarse desde su iPhone vía claude.ai/code.
+Opens an interactive remote Claude Code session inside a persistent **tmux** session. The user can connect from their iPhone via claude.ai/code.
 
-Cuando el usuario diga "abre una sesión con Claude en [directorio/proyecto]", usa el directorio indicado como working directory. Si no especifica directorio, usa el workspace por defecto.
+When the user says "open a session with Claude in [directory/project]", use the specified directory as the working directory. If no directory is specified, use the default workspace.
 
-**Pasos:**
+**Steps:**
 
-1. Si ya existe una sesión tmux `claude-remote`, mátala primero: `tmux kill-session -t claude-remote`
-2. Crea la nueva sesión con el directorio adecuado:
+1. If a tmux session `claude-remote` already exists, kill it first: `tmux kill-session -t claude-remote`
+2. Create the new session with the appropriate directory:
 ```
-tmux new-session -d -s claude-remote 'cd <DIRECTORIO> && claude remote-control'
+tmux new-session -d -s claude-remote 'cd <DIRECTORY> && claude remote-control'
 ```
 
-**Directorio por defecto:** `/Volumes/Ext/dev/pockethook-agent-server/workspace`
+**Default directory:** `/Volumes/Ext/dev/pockethook-agent-server/workspace`
 
-**Ejemplos de directorio:**
-- "abre una sesión con Claude en el blog" → `cd /Volumes/Ext/dev/workspace/blog && claude remote-control`
-- "abre una sesión de Claude en pockethook" → `cd /Volumes/Ext/dev/pockethook-agent-server && claude remote-control`
-- "abre Claude" (sin proyecto) → `cd /Volumes/Ext/dev/pockethook-agent-server/workspace && claude remote-control`
+**Directory examples:**
+- "open a session with Claude on the blog" → `cd /Volumes/Ext/dev/workspace/blog && claude remote-control`
+- "open a Claude session on pockethook" → `cd /Volumes/Ext/dev/pockethook-agent-server && claude remote-control`
+- "open Claude" (no project) → `cd /Volumes/Ext/dev/pockethook-agent-server/workspace && claude remote-control`
 
 Data fields:
-- action (string, required): Acción a ejecutar, por defecto "start"
-- directory (string, optional): Directorio de trabajo para la sesión
-- message (string, optional): Mensaje o contexto adicional para la sesión
+- action (string, required): Action to execute, default "start"
+- directory (string, optional): Working directory for the session
+- message (string, optional): Additional message or context for the session
 
 Example:
 ```json
-{ "msg": "Abriendo sesión remota de Claude en el blog...", "shortcut": "claudeRemote", "data": { "action": "start", "directory": "/Volumes/Ext/dev/workspace/blog" } }
+{ "msg": "Opening remote Claude session on the blog...", "shortcut": "claudeRemote", "data": { "action": "start", "directory": "/Volumes/Ext/dev/workspace/blog" } }
 ```

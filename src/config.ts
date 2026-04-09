@@ -102,6 +102,7 @@ Example:
 \`\`\`
 
 Use kebab-case for file names (e.g., new-playlist.md, send-email.md).
+IMPORTANT: Skill files must ALWAYS be written in English, regardless of the language the user is speaking. Display names, descriptions, and field descriptions must all be in English.
 
 ## Workspace
 
