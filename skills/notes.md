@@ -10,5 +10,5 @@ Data fields:
 
 Example:
 ```json
-{ "msg": "Creating your note...", "shortcut": "New Note", "data": { "title": "Shopping List", "content": "1. Milk\n2. Eggs\n3. Bread" } }
+{ "msg": "Creating your note...", "shortcut": "newNote", "data": { "title": "Shopping List", "content": "1. Milk\n2. Eggs\n3. Bread" } }
 ```

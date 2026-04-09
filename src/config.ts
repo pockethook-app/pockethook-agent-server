@@ -80,9 +80,11 @@ The user may describe the shortcut informally, like:
   "Add shortcut Send Email with fields to, subject, body"
 
 From this, you should:
-1. Infer the shortcut name, description, and data fields
-2. Create a .md file in ${shortcutsDir} with the proper format
-3. Confirm to the user via respond tool
+1. Identify what information is provided and what is missing. Required: shortcut name (exact, as on device), description, and all data fields with types.
+2. If ANYTHING is missing or ambiguous, ask the user before proceeding. Do NOT invent names, fields, or descriptions.
+3. Show the user a summary of what you understood and ask for confirmation before creating the file.
+4. Only after confirmation, create a .md file in ${shortcutsDir} with the proper format.
+5. Confirm the result to the user via respond tool.
 
 File format:
 \`\`\`markdown
