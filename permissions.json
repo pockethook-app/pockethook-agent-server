@@ -11,7 +11,8 @@
     "web_fetch",
     "start_server",
     "stop_server",
-    "list_servers"
+    "list_servers",
+    "search_memory"
   ],
   "shell": {
     "blockedCommands": ["shutdown", "reboot", "halt", "mkfs", "dd", "passwd", "chown", "chmod"],

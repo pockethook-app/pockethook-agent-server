@@ -2,31 +2,34 @@
 
 Shortcut name: `claudeRemote`
 
-Opens an interactive remote Claude Code session inside a persistent **tmux** session. The user can connect from their iPhone via claude.ai/code.
+Opens an interactive Claude Remote Control session in a persistent tmux session so it stays alive after launch.
 
-When the user says "open a session with Claude in [directory/project]", use the specified directory as the working directory. If no directory is specified, use the default workspace.
+Important behavior:
+- Start Remote Control with `claude remote-control`.
+- To send one-shot prompts to Claude in jobs, use `claude -p "your prompt"` instead. Do not use Remote Control for that.
+- Trust the workspace before interactive use. Prefer `claude --trust-workspace` in the target directory.
+- tmux is recommended here because Remote Control is a long-lived local process and the terminal must stay open.
 
-**Steps:**
+Recommended shell behavior:
+1. If a tmux session `claude-remote` already exists, kill it first.
+2. Start a new detached tmux session in the target directory.
+3. Run `claude --trust-workspace && claude remote-control`.
 
-1. If a tmux session `claude-remote` already exists, kill it first: `tmux kill-session -t claude-remote`
-2. Create the new session with the appropriate directory:
+Recommended commands:
+```bash
+tmux kill-session -t claude-remote || true
+tmux new-session -d -s claude-remote 'cd <DIRECTORY> && claude --trust-workspace && claude remote-control'
 ```
-tmux new-session -d -s claude-remote 'cd <DIRECTORY> && claude remote-control'
-```
 
-**Default directory:** `/Volumes/Ext/dev/pockethook-agent-server/workspace`
-
-**Directory examples:**
-- "open a session with Claude on the blog" → `cd /Volumes/Ext/dev/workspace/blog && claude remote-control`
-- "open a Claude session on pockethook" → `cd /Volumes/Ext/dev/pockethook-agent-server && claude remote-control`
-- "open Claude" (no project) → `cd /Volumes/Ext/dev/pockethook-agent-server/workspace && claude remote-control`
+Default directory:
+- `/Volumes/Ext/dev/pockethook-main/pockethook-agent-server/workspace`
 
 Data fields:
-- action (string, required): Action to execute, default "start"
-- directory (string, optional): Working directory for the session
-- message (string, optional): Additional message or context for the session
+- action (string, required): Action to execute. Use `start`.
+- directory (string, optional): Working directory for the session.
+- message (string, optional): Optional label or context.
 
 Example:
 ```json
-{ "msg": "Opening remote Claude session on the blog...", "shortcut": "claudeRemote", "data": { "action": "start", "directory": "/Volumes/Ext/dev/workspace/blog" } }
+{ "msg": "Opening remote Claude session...", "shortcut": "claudeRemote", "data": { "action": "start", "directory": "/Volumes/Ext/dev/workspace/blog" } }
 ```

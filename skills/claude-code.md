@@ -1,70 +1,135 @@
-### Claude Code — Programming Tool
+### Claude Code
 
-This skill is NOT an iOS shortcut. It is an instruction for the agent to use Claude Code CLI (`claude`) as a programming tool inside background jobs.
+Shortcut name: `claudeRemote`
 
-When you need to perform a complex programming task (creating projects, refactoring, reviewing large codebases, etc.), delegate the work to Claude Code by running it as a shell job with a long timeout.
+Guidance for using Claude Code from PocketHook, covering both non-interactive jobs and interactive Remote Control sessions.
 
----
+## 1) Non-interactive Claude jobs
 
-**How to use:**
+Use Claude Code CLI for programming and code analysis tasks inside background jobs.
 
-Create a SINGLE job `type: "once"`, `execution_type: "shell"` with `timeout: "30m"` (or more for very heavy tasks). The job runs `claude --print` directly, captures the output, and delivers it to the user when finished. No tmux, no polling, no complications.
+Preferred command:
+- `claude -p "your prompt"`
 
-```
+Equivalent long form:
+- `claude --print "your prompt"`
+
+Recommended for jobs that modify files:
+- `claude -p --dangerously-skip-permissions "your prompt"`
+
+Important behavior:
+- `-p` / `--print` is the correct non-interactive mode for one-shot jobs.
+- `-p` exits after answering, so it fits PocketHook jobs well.
+- `-p` skips the workspace trust dialog, so only use it in directories you trust.
+- Always instruct Claude to use non-interactive flags in downstream CLI commands (`--yes`, `-y`, `--defaults`, `--no-interactive`) because jobs cannot answer prompts.
+- Use `timeout: "30m"` for normal programming tasks and `timeout: "1h"` for larger ones.
+- Prefer a single shell job that runs `claude -p ...` directly.
+
+Recommended job pattern:
+```js
 create_job({
   name: "Task description",
   type: "once",
   execution_type: "shell",
   timeout: "30m",
-  prompt: "cd /path/to/project && claude --print --dangerously-skip-permissions \"Your prompt here. IMPORTANT: Always use non-interactive flags in all CLI commands.\""
+  prompt: "cd /path/to/project && claude -p --dangerously-skip-permissions \"Your prompt here. IMPORTANT: Always use non-interactive flags (--yes, -y, --defaults, --no-interactive) in all CLI commands. You cannot respond to interactive prompts.\""
 })
 ```
 
-The result is automatically delivered to the user via PocketHook polling when the job finishes.
+When to use this mode:
+- Create projects
+- Review code
+- Refactor or debug
+- Run build/test/fix workflows
+- Any long programming task that should complete in background and return a final result
 
----
+Common reasons jobs may fail or appear not to run as expected:
+- The `claude` binary is not on the job runner PATH. Use the full path if needed.
+- The command launched an interactive tool that waited for input.
+- The default timeout was too short.
+- Workspace trust or permissions blocked the operation.
+- Authentication is missing or expired.
+- The job finished, but delivery depends on PocketHook polling and a later fetch.
 
-**Claude Code CLI flags:**
-- `--print` (`-p`): Non-interactive mode. Runs the prompt and exits.
-- `--dangerously-skip-permissions`: Allows writing files and running commands without confirmation. Required for tasks that modify the filesystem.
-- `--model`: Specify model.
-- `--max-turns`: Limit tool turns.
+Practical debugging tips for jobs:
+- Prefer explicit `cd /absolute/path && claude ...`.
+- If PATH is unreliable in jobs, use the absolute binary path.
+- Add `--debug-file /tmp/claude-job.log` when diagnosing failures.
+- Keep the command fully non-interactive.
+- Use `claude auth status --text` separately if authentication is suspected.
 
-**IMPORTANT — Non-interactive commands:**
-Claude Code runs without an interactive terminal. The prompt you pass MUST instruct it to always use non-interactive flags in any CLI tool it runs. For example:
-- `npx sv create` → NO (interactive, hangs). Use `npx sv create my-app --template minimal --no-install` or equivalent with `--yes`/`-y`.
-- `npm init` → NO. Use `npm init -y`.
-- `npx create-next-app` → Pass all flags: `--yes --ts --app --src-dir --eslint`.
-- Any CLI that prompts for options → look for its `--yes`, `--no-interactive`, `--defaults` flag or similar.
+## 2) Workspace trust
 
-Always include in the Claude Code prompt: **"IMPORTANT: Always use non-interactive flags (--yes, -y, --defaults, --no-interactive) in all CLI commands. You cannot respond to interactive prompts."**
+Before starting an interactive Claude session in a folder, trust it first.
 
-**Timeout:** Use `timeout: "30m"` for normal tasks, `timeout: "1h"` for large projects. The default without timeout is 60s (insufficient for Claude Code).
+Useful command:
+- `claude --trust-workspace`
 
-**When to use Claude Code vs the agent itself:**
-- **Claude Code** (this skill): heavy programming tasks — creating projects, refactoring, complex debugging. Has better code context, LSP, advanced grep, precise editing.
-- **Agent itself** (`execution_type: "prompt"`): lightweight tasks that only read a few files, or that need PocketHook tools (respond, start_server, etc.).
+Notes:
+- Remote Control documentation says to run `claude` in the directory at least once to accept workspace trust.
+- In automation, `claude --trust-workspace` is a clearer explicit step when you need to trust a folder before interactive use.
+- For print mode, Claude notes that the trust dialog is skipped, so only run `-p` in directories you already trust.
 
----
+## 3) Remote Control
 
-**Example — create project:**
+Remote Control starts with:
+- `claude remote-control`
+
+Purpose:
+- Keep a Claude session running locally and control it from claude.ai/code or the Claude mobile app.
+
+Important behavior:
+- `claude remote-control` is a persistent local server process.
+- The terminal or host process must stay alive, otherwise the remote session ends.
+- It is different from `claude -p`, which is one-shot and exits immediately.
+- Remote Control requires Claude.ai login with a supported subscription.
+- Remote Control docs say you should trust the workspace first.
+
+## 4) Should tmux be used?
+
+Recommendation:
+- **Yes for Remote Control.** tmux is useful to keep `claude remote-control` alive after the launching client disconnects.
+- **No for one-shot jobs.** tmux adds unnecessary complexity for `claude -p` background jobs.
+
+Why tmux helps Remote Control:
+- Remote Control is a long-lived process.
+- The docs explicitly say the terminal must stay open.
+- tmux provides a durable terminal session on the machine.
+
+Why tmux is not needed for jobs:
+- PocketHook jobs already run in background and capture output.
+- `claude -p` is designed to run and exit.
+- Adding tmux makes output capture and failure diagnosis harder.
+
+## 5) PocketHook shortcut for Remote Control
+
+Use this shortcut when the user wants an interactive remote Claude session.
+
+Data fields:
+- action (string, required): Action to execute. Use `start`.
+- directory (string, optional): Working directory for the session.
+- message (string, optional): Optional label or context.
+
+Recommended shell behavior behind the shortcut:
+1. Ensure the target directory is trusted, for example with `claude --trust-workspace`.
+2. If a tmux session `claude-remote` already exists, stop it.
+3. Start a new tmux session that runs `claude remote-control` in the target directory.
+
+Recommended commands:
+```bash
+tmux kill-session -t claude-remote || true
+tmux new-session -d -s claude-remote 'cd <DIRECTORY> && claude --trust-workspace && claude remote-control'
 ```
-create_job({
-  name: "Create API with Hono",
-  type: "once",
-  execution_type: "shell",
-  timeout: "30m",
-  prompt: "cd /Volumes/Ext/dev/workspace && claude --print --dangerously-skip-permissions \"Create a hono-api project with Bun and Hono. Routes GET /health and POST /echo. Install deps and verify it compiles. IMPORTANT: Always use non-interactive flags in all CLI commands.\""
-})
-```
 
-**Example — review project:**
-```
-create_job({
-  name: "Review blog",
-  type: "once",
-  execution_type: "shell",
-  timeout: "30m",
-  prompt: "cd /Volumes/Ext/dev/workspace/blog && claude --print \"Review this project: structure, quality, improvements and errors. Concise report.\""
-})
+Default directory:
+- `/Volumes/Ext/dev/pockethook-main/pockethook-agent-server/workspace`
+
+Directory examples:
+- "open a session with Claude on the blog" → `cd /Volumes/Ext/dev/workspace/blog && claude --trust-workspace && claude remote-control`
+- "open a Claude session on pockethook" → `cd /Volumes/Ext/dev/pockethook-main/pockethook-agent-server && claude --trust-workspace && claude remote-control`
+- "open Claude" → `cd /Volumes/Ext/dev/pockethook-main/pockethook-agent-server/workspace && claude --trust-workspace && claude remote-control`
+
+Example:
+```json
+{ "msg": "Opening remote Claude session...", "shortcut": "claudeRemote", "data": { "action": "start", "directory": "/Volumes/Ext/dev/workspace/blog" } }
 ```

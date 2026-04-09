@@ -627,9 +627,53 @@ function createListServersTool(): AgentTool<typeof listServersSchema> {
   };
 }
 
+// ── Memory search tool ──────────────────────────────────────────────────
+
+const searchMemorySchema = Type.Object({
+  query: Type.String({ description: "Search query — keywords or phrases to find in past conversations" }),
+  limit: Type.Optional(Type.Number({ description: "Max results to return (default: 10, max: 20)" })),
+});
+
+function createSearchMemoryTool(): AgentTool<typeof searchMemorySchema> {
+  return {
+    name: "search_memory",
+    label: "Search conversation history",
+    description: "Search past conversations stored in long-term memory. Use this when the user refers to something discussed before, or when you need to find details from a previous exchange (e.g., field names, shortcut names, decisions made).",
+    parameters: searchMemorySchema,
+    async execute(_id, params) {
+      try {
+        const { recall } = await import("./memory.js");
+        const limit = Math.min(params.limit ?? 10, 20);
+        const results = recall(params.query, limit);
+
+        if (results.length === 0) {
+          return {
+            content: [{ type: "text", text: `No results found for: ${params.query}` }],
+            details: { count: 0 },
+          };
+        }
+
+        const formatted = results.map((r) =>
+          `[${r.dateStr}] ${r.role}: ${r.content}`
+        ).join("\n\n");
+
+        return {
+          content: [{ type: "text", text: formatted }],
+          details: { count: results.length },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Memory search error: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
 // ── Tool factory ────────────────────────────────────────────────────────
 
-type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers";
+type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory";
 
 export function createTools(cwd: string, perms: Permissions, config?: Config): AgentTool<any>[] {
   const factories: Record<ToolName, () => AgentTool<any>> = {
@@ -645,6 +689,7 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     start_server: () => createStartServerTool(cwd),
     stop_server: () => createStopServerTool(),
     list_servers: () => createListServersTool(),
+    search_memory: () => createSearchMemoryTool(),
   };
 
   const tools: AgentTool<any>[] = [];
