@@ -380,6 +380,41 @@ Keep responses concise. You can use Markdown in msg (bold, code blocks, lists, e
 let BASE_SYSTEM_PROMPT: string | null = null;
 let cachedVectorMemoryFlag: boolean = false;
 
+// ── Personality (hot-reloaded from personality.md) ──────────────────────
+
+const PERSONALITY_PATH = join(PROJECT_ROOT, "personality.md");
+let cachedPersonality: string = "";
+let cachedPersonalityMtime: number = 0;
+
+function loadPersonality(): string {
+  if (!existsSync(PERSONALITY_PATH)) return "";
+  try {
+    const content = readFileSync(PERSONALITY_PATH, "utf-8").trim();
+    return content ? "\n\n## Personality\n\n" + content : "";
+  } catch {
+    return "";
+  }
+}
+
+function getPersonality(): string {
+  try {
+    const mtime = statSync(PERSONALITY_PATH).mtimeMs;
+    if (mtime !== cachedPersonalityMtime) {
+      cachedPersonality = loadPersonality();
+      cachedPersonalityMtime = mtime;
+      if (cachedPersonality) {
+        logger.info("Personality reloaded.");
+      }
+    }
+  } catch {
+    if (cachedPersonality) {
+      cachedPersonality = "";
+      cachedPersonalityMtime = 0;
+    }
+  }
+  return cachedPersonality;
+}
+
 // ── Agent instructions (hot-reloaded from agent-instructions.md) ────────
 
 const INSTRUCTIONS_PATH = join(PROJECT_ROOT, "agent-instructions.md");
@@ -616,7 +651,7 @@ export function getSystemPrompt(agentName: string, vectorMemoryEnabled: boolean 
     }
   }
 
-  return BASE_SYSTEM_PROMPT + formatCurrentDate() + cachedLocalePrompt + getInstructions() + cachedSkillsIndex + getCustomToolsPrompt();
+  return BASE_SYSTEM_PROMPT + getPersonality() + formatCurrentDate() + cachedLocalePrompt + getInstructions() + cachedSkillsIndex + getCustomToolsPrompt();
 }
 
 // ── Config ──────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@
     "start": "bun run src/index.ts",
     "setup": "bun run src/setup.ts",
     "switch": "bun run src/setup.ts --switch",
+    "personality": "bun run src/setup.ts --personality",
     "permissions": "bun run src/setup.ts --permissions",
     "refresh": "bun run src/setup.ts --refresh",
     "service": "bun run src/service.ts",

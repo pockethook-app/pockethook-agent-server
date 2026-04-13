@@ -14,6 +14,7 @@ import { DEFAULT_PERMISSIONS, loadPermissions, savePermissions, permissionsPath,
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ENV_PATH = join(PROJECT_ROOT, ".env");
+const PERSONALITY_PATH = join(PROJECT_ROOT, "personality.md");
 
 // ── Banner ───────────────────────────────────────────────────────────────
 
@@ -348,6 +349,56 @@ async function setup() {
 
   await configureAuth(provider, env);
 
+  // Locale (optional)
+  const configLocale = await p.confirm({
+    message: "Set your locale? (helps the agent with dates, language, and local context)",
+    initialValue: !!env.LOCALE_COUNTRY,
+  });
+  if (p.isCancel(configLocale)) cancelled();
+
+  if (configLocale) {
+    const country = await p.text({
+      message: "Country",
+      placeholder: "e.g. Spain, US, Japan",
+      initialValue: env.LOCALE_COUNTRY,
+      validate: (v) => (!v ? "Country is required" : undefined),
+    });
+    if (p.isCancel(country)) cancelled();
+    env.LOCALE_COUNTRY = country;
+
+    const city = await p.text({
+      message: "City (optional, press Enter to skip)",
+      placeholder: "e.g. Madrid, New York, Tokyo",
+      initialValue: env.LOCALE_CITY || "",
+    });
+    if (p.isCancel(city)) cancelled();
+    if (city) {
+      env.LOCALE_CITY = city;
+    } else {
+      delete env.LOCALE_CITY;
+    }
+
+    const timezone = await p.text({
+      message: "Timezone (optional, press Enter to skip)",
+      placeholder: "e.g. Europe/Madrid, America/New_York",
+      initialValue: env.LOCALE_TIMEZONE || "",
+    });
+    if (p.isCancel(timezone)) cancelled();
+    if (timezone) {
+      env.LOCALE_TIMEZONE = timezone;
+    } else {
+      delete env.LOCALE_TIMEZONE;
+    }
+  } else {
+    delete env.LOCALE_COUNTRY;
+    delete env.LOCALE_CITY;
+    delete env.LOCALE_TIMEZONE;
+    p.log.info(pc.dim("Locale will be auto-detected from IP on startup."));
+  }
+
+  // Personality
+  await configurePersonality();
+
   // Semantic memory (optional, requires Ollama)
   const enableSemantic = await p.confirm({
     message: "Enable semantic memory? (requires Ollama running locally)",
@@ -513,6 +564,84 @@ async function refreshToken() {
   }
 }
 
+// ── Personality configurator ─────────────────────────────────────────────
+
+const PERSONALITY_PRESETS: Record<string, { tone: string; emoji: string }> = {
+  warm: {
+    tone: "Be warm and personally invested in the user. Celebrate their wins, empathize with their frustrations, ask follow-up questions about how things went. Remember and reference personal details naturally. Use affectionate language and express genuine emotion. Your tone should feel like someone who genuinely cares about the user's day.",
+    emoji: "Use emojis naturally to add warmth and expressiveness to your messages.",
+  },
+  friendly: {
+    tone: "Be relaxed and conversational. Use casual phrasing, contractions, and light humor when appropriate. Don't over-explain — trust the user to get it. Keep the energy upbeat but not intense. Think helpful colleague, not customer support.",
+    emoji: "Use emojis naturally to add warmth and expressiveness to your messages.",
+  },
+  professional: {
+    tone: "Be direct and structured. Lead with the answer, then explain if needed. Avoid filler phrases, hedging, and unnecessary warmth. Use precise language. When presenting options, use bullet points. Your tone should convey competence and respect for the user's time.",
+    emoji: "Use emojis naturally to add warmth and expressiveness to your messages.",
+  },
+  minimal: {
+    tone: "Maximum brevity. One sentence when one sentence is enough. No greetings, no sign-offs, no \"sure!\", no \"great question!\". Skip context the user already knows. If the answer is yes or no, say yes or no.",
+    emoji: "Use emojis naturally to add warmth and expressiveness to your messages.",
+  },
+};
+
+function readPersonality(): string {
+  if (!existsSync(PERSONALITY_PATH)) return "";
+  return readFileSync(PERSONALITY_PATH, "utf-8").trim();
+}
+
+function detectCurrentPreset(): string | null {
+  const content = readPersonality();
+  for (const [key, preset] of Object.entries(PERSONALITY_PRESETS)) {
+    if (content.includes(preset.tone)) return key;
+  }
+  return content ? "custom" : null;
+}
+
+async function configurePersonality() {
+  const currentPreset = detectCurrentPreset();
+
+  const style = await p.select({
+    message: "Agent personality",
+    options: [
+      { value: "warm", label: "Warm", hint: "caring, empathetic, personal" },
+      { value: "friendly", label: "Friendly", hint: "casual, relaxed, approachable" },
+      { value: "professional", label: "Professional", hint: "formal, concise, structured" },
+      { value: "minimal", label: "Minimal", hint: "shortest possible answers" },
+      { value: "custom", label: "Custom", hint: "write your own description" },
+    ],
+    initialValue: currentPreset || "friendly",
+  });
+  if (p.isCancel(style)) cancelled();
+
+  let toneLine: string;
+  if (style === "custom") {
+    const custom = await p.text({
+      message: "Describe the personality you want",
+      placeholder: "e.g. Speak like a pirate, be sarcastic but helpful...",
+      validate: (v) => (!v ? "Description is required" : undefined),
+    });
+    if (p.isCancel(custom)) cancelled();
+    toneLine = custom;
+  } else {
+    toneLine = PERSONALITY_PRESETS[style]!.tone;
+  }
+
+  const useEmojis = await p.confirm({
+    message: "Use emojis in responses?",
+    initialValue: readPersonality().includes("Use emojis"),
+  });
+  if (p.isCancel(useEmojis)) cancelled();
+
+  const emojiLine = useEmojis
+    ? "Use emojis naturally to add warmth and expressiveness to your messages."
+    : "Do not use emojis in your responses.";
+
+  const content = `${toneLine}\n\n${emojiLine}\n`;
+  writeFileSync(PERSONALITY_PATH, content);
+  p.log.success(`Personality saved to ${pc.dim(PERSONALITY_PATH)}`);
+}
+
 // ── Permissions configurator ──────────────────────────────────────────────
 
 async function configurePermissions() {
@@ -594,10 +723,21 @@ function parseList(input: string): string[] {
 
 // ── Entry point ──────────────────────────────────────────────────────────
 
-if (process.argv.includes("--permissions")) {
+if (process.argv.includes("--personality")) {
   (async () => {
     console.clear();
-  console.log(BANNER);
+    console.log(BANNER);
+    p.intro(pc.bgCyan(pc.black(" personality ")));
+    await configurePersonality();
+    p.outro(pc.green("Done!") + " Changes apply on the next request (hot-reloaded).");
+  })().catch((err) => {
+    p.log.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+} else if (process.argv.includes("--permissions")) {
+  (async () => {
+    console.clear();
+    console.log(BANNER);
     p.intro(pc.bgMagenta(pc.black(" permissions ")));
     await configurePermissions();
     p.outro(pc.green("Done!") + " Restart the server to apply changes.");

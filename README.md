@@ -40,7 +40,7 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and mul
 # Install dependencies
 bun install
 
-# Interactive setup (provider, model, auth, port, fetch message, permissions)
+# Interactive setup (provider, model, auth, locale, personality, permissions)
 bun run setup
 
 # Start the server with HTTPS tunnel
@@ -57,6 +57,7 @@ bun run tunnel    # HTTPS tunnel in another terminal
 |---------|-------------|
 | `bun run setup` | Full interactive setup |
 | `bun run switch` | Change LLM provider/model |
+| `bun run personality` | Configure agent personality and emoji usage |
 | `bun run permissions` | Configure tool permissions |
 | `bun run refresh` | Refresh OAuth token (Codex / Copilot) |
 | `bun run start` | Start the server |
@@ -244,6 +245,21 @@ Skills can also be **behavior rules** without shortcuts (e.g., "how to plan a fa
 
 The agent can create and manage skills when asked by the user. See `skills/_example.md` for the full template.
 
+## Personality
+
+Configure the agent's tone and emoji usage via `bun run personality` or by editing `personality.md` directly (hot-reloaded on next request).
+
+Four built-in presets:
+
+| Preset | Description |
+|--------|-------------|
+| **Warm** | Personally invested, empathetic, celebrates wins, asks follow-ups |
+| **Friendly** | Casual, relaxed, light humor, like a helpful colleague |
+| **Professional** | Direct, structured, precise, respects the user's time |
+| **Minimal** | Maximum brevity, no filler, no pleasantries |
+
+You can also choose **Custom** to write your own personality description. Emoji usage is a separate yes/no option independent of the personality preset.
+
 ## Agent Instructions
 
 Edit `agent-instructions.md` in the project root to customize how the agent works — its methodology, coding style, communication preferences, etc. Changes are picked up automatically without restarting.
@@ -419,6 +435,7 @@ pockethook-agent-server/
 ├── workspace/            # Agent's working directory
 │   └── dashboard/        # Custom dashboard files (hot-reloaded)
 ├── agent-instructions.md # Editable agent behavior (hot-reloaded)
+├── personality.md        # Agent personality and emoji config (hot-reloaded)
 ├── permissions.json      # Tool permissions config
 └── .env                  # Runtime configuration
 ```
