@@ -163,20 +163,27 @@ function macInstall(): void {
 
 function macStop(): void {
   try {
-    execSync(`launchctl stop ${LAUNCHD_LABEL}`, { stdio: "inherit" });
+    // unload prevents KeepAlive from restarting the service
+    execSync(`launchctl unload -w "${LAUNCHD_PLIST}"`, { stdio: "pipe" });
+  } catch {}
+  // Kill any orphaned bun processes from --watch
+  try {
+    const pids = execSync(
+      `pgrep -f "bun.*pockethook-agent-server/src/index.ts"`,
+      { encoding: "utf-8" },
+    ).trim();
+    if (pids) {
+      execSync(`kill ${pids.split("\n").join(" ")}`, { stdio: "inherit" });
+    }
   } catch {}
 }
 
 function macRestart(): void {
+  // Stop fully, then reload
+  macStop();
   try {
-    execSync(`launchctl kickstart -k gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`, { stdio: "inherit" });
-  } catch {
-    // Fallback: stop + start
-    macStop();
-    try {
-      execSync(`launchctl start ${LAUNCHD_LABEL}`, { stdio: "inherit" });
-    } catch {}
-  }
+    execSync(`launchctl load -w "${LAUNCHD_PLIST}"`, { stdio: "inherit" });
+  } catch {}
 }
 
 function macUninstall(): void {

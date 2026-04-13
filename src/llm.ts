@@ -5,6 +5,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Config } from "./config.js";
 import { updateEnvFile } from "./config.js";
 import { createRespondTool, type PocketHookResponse } from "./tools.js";
+import { FAKE_ACK_TEXT } from "./sessions.js";
 import { logger } from "./logger.js";
 
 /**
@@ -104,6 +105,44 @@ async function ensureFreshApiKey(config: Config): Promise<string> {
 }
 
 /**
+ * Quick single-turn prompt — no tools, no agent, minimal tokens.
+ * Used for classification, entity extraction, and other lightweight LLM tasks.
+ */
+export async function quickPrompt(config: Config, prompt: string, maxTokens: number = 100): Promise<string> {
+  if (!cachedModel) {
+    cachedModel = resolveModel(config);
+  }
+
+  const apiKey = await ensureFreshApiKey(config);
+
+  const agent = new Agent({
+    initialState: {
+      systemPrompt: "You are a JSON classifier. Respond ONLY with valid JSON, no other text.",
+      model: cachedModel,
+      tools: [],
+      messages: [],
+    },
+    getApiKey: async () => apiKey,
+  });
+
+  const result = await agent.prompt(prompt);
+
+  // Extract text from the last assistant message
+  const messages = agent.state.messages;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || msg.role !== "assistant") continue;
+    const text = (msg as AssistantMessage).content
+      .filter((c) => c.type === "text")
+      .map((c) => (c as { type: "text"; text: string }).text)
+      .join("");
+    if (text) return text;
+  }
+
+  return "";
+}
+
+/**
  * Run the agent with tools. Returns PocketHook-formatted responses.
  */
 export async function chat(
@@ -157,7 +196,8 @@ export async function chat(
     return pockethookResponses;
   }
 
-  // Fallback: extract text from the last assistant message
+  // Fallback: extract text from the last REAL assistant message
+  // (skip the synthetic ack message injected for memory context)
   const allMessages = agent.state.messages;
   for (let i = allMessages.length - 1; i >= 0; i--) {
     const msg = allMessages[i];
@@ -165,11 +205,14 @@ export async function chat(
     const text = (msg as AssistantMessage).content
       .filter((c) => c.type === "text")
       .map((c) => (c as { type: "text"; text: string }).text)
-      .join("");
-    if (text) {
+      .join("")
+      .trim();
+    if (text && text !== FAKE_ACK_TEXT) {
+      logger.warn("LLM did not call respond tool, using fallback text");
       return [{ msg: text }];
     }
   }
 
-  return [{ msg: "I processed your request but have no text response." }];
+  logger.warn("LLM produced no usable response (tool call not made, no fallback text)");
+  return [{ msg: "I processed your request but have no text response. The model may not support tool calling properly." }];
 }

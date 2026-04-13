@@ -13,6 +13,7 @@
     "service": "bun run src/service.ts",
     "tunnel": "bun run src/tunnel.ts",
     "dev:tunnel": "bun run src/dev-tunnel.ts",
+    "logs": "bun run src/logs.ts",
     "test": "bun test"
   },
   "dependencies": {

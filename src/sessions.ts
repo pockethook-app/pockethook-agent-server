@@ -1,5 +1,10 @@
 import type { UserMessage, AssistantMessage, Message } from "@mariozechner/pi-ai";
-import { remember, recall, type MemoryEntry } from "./memory.js";
+import { remember, recall, rememberAsync, recallHybrid, type MemoryEntry } from "./memory.js";
+import { queryTriples, searchTriples, type Triple } from "./knowledge-graph.js";
+import { extractQueryEntities } from "./vector-memory.js";
+import { logger } from "./logger.js";
+
+export const FAKE_ACK_TEXT = "Understood, I'll use that context if relevant.";
 
 /**
  * Session management: short-term (in-memory) + long-term (SQLite FTS5).
@@ -29,9 +34,14 @@ export function getMessages(sessionId: string): Message[] {
 
 /**
  * Build the full context for the LLM:
- * recalled memories (relevant past) + recent messages (short-term window).
+ * recalled memories (relevant past) + knowledge graph facts + recent messages (short-term window).
  */
-export function buildContext(sessionId: string, userQuery: string, maxRecall: number = 5): Message[] {
+export async function buildContext(
+  sessionId: string,
+  userQuery: string,
+  vectorEnabled: boolean = false,
+  maxRecall: number = 5,
+): Promise<Message[]> {
   const recentMessages = getMessages(sessionId);
 
   // Build enriched query: user query + key words from recent messages
@@ -55,31 +65,105 @@ export function buildContext(sessionId: string, userQuery: string, maxRecall: nu
     }
   }
 
-  // Search long-term memory with enriched query, excluding messages already in short-term window
-  const memories = recall(searchQuery, maxRecall, sessionId, recentMessages.length);
+  // Extract entities from query for focused search
+  let queryEntities: { wings: string[]; room: string | null } = { wings: [], room: null };
+  if (vectorEnabled) {
+    try {
+      queryEntities = await extractQueryEntities(userQuery);
+    } catch {
+      // Extraction failed — search without filters
+    }
+  }
 
-  if (memories.length === 0) {
+  // Search long-term memory (hybrid FTS5 + vector if enabled)
+  const filters = queryEntities.wings.length > 0 || queryEntities.room
+    ? { wings: queryEntities.wings.length > 0 ? queryEntities.wings : undefined, room: queryEntities.room ?? undefined }
+    : undefined;
+  const memories = await recallHybrid(searchQuery, maxRecall, vectorEnabled, sessionId, recentMessages.length, filters);
+
+  // Search knowledge graph for relevant facts
+  let facts: Triple[] = [];
+  if (vectorEnabled) {
+    try {
+      // Use extracted wings to query knowledge graph precisely
+      const subjects = queryEntities.wings.length > 0
+        ? queryEntities.wings
+        : ["user"]; // Default: always include user facts
+
+      for (const subject of subjects) {
+        const subjectFacts = queryTriples(subject);
+        for (const t of subjectFacts) {
+          if (!facts.some((f) => f.id === t.id)) {
+            facts.push(t);
+          }
+        }
+      }
+
+      // Also search by keywords for entities not captured as wings
+      const queryWords = userQuery
+        .replace(/[^\p{L}\p{N}\s]/gu, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 2);
+      for (const word of queryWords.slice(0, 5)) {
+        const found = searchTriples(word, true);
+        for (const t of found) {
+          if (!facts.some((f) => f.id === t.id)) {
+            facts.push(t);
+          }
+        }
+      }
+
+      // Always include user facts
+      if (!subjects.includes("user")) {
+        const userFacts = queryTriples("user");
+        for (const t of userFacts) {
+          if (!facts.some((f) => f.id === t.id)) {
+            facts.push(t);
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn(`Knowledge graph query failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  if (memories.length === 0 && facts.length === 0) {
     return recentMessages;
   }
 
-  // Format recalled memories as a system-injected user message at the start
-  const memoryContext = formatMemories(memories);
+  // Build context injection
+  let contextParts: string[] = [];
+
+  if (memories.length > 0) {
+    contextParts.push(
+      "[Recalled from past conversations — the dates shown indicate when each message was said. Use as context if relevant.]\n\n"
+      + formatMemories(memories),
+    );
+  }
+
+  if (facts.length > 0) {
+    contextParts.push(
+      "[Known facts from knowledge graph — currently valid.]\n\n"
+      + formatFacts(facts),
+    );
+  }
+
   const memoryMessage: UserMessage = {
     role: "user",
-    content: `[Recalled from past conversations — the dates shown indicate when each message was said. Use as context if relevant.]\n\n${memoryContext}`,
-    timestamp: memories[0]!.timestamp,
+    content: contextParts.join("\n\n---\n\n"),
+    timestamp: memories[0]?.timestamp ?? Date.now(),
   };
 
   // Fake assistant ack to keep message alternation valid
   const ackMessage: AssistantMessage = {
     role: "assistant",
-    content: [{ type: "text", text: "Understood, I'll use that context if relevant." }],
+    content: [{ type: "text", text: FAKE_ACK_TEXT }],
     api: "anthropic-messages" as any,
     provider: "",
     model: "",
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     stopReason: "stop",
-    timestamp: memories[0]!.timestamp,
+    timestamp: memories[0]?.timestamp ?? Date.now(),
   };
 
   return [memoryMessage, ackMessage, ...recentMessages];
@@ -91,10 +175,17 @@ function formatMemories(memories: MemoryEntry[]): string {
     .join("\n\n");
 }
 
+function formatFacts(facts: Triple[]): string {
+  return facts
+    .map((t) => `${t.subject} → ${t.predicate} → ${t.object}`)
+    .join("\n");
+}
+
 /**
  * Add a user message — saves to both short-term and long-term memory.
+ * When vectorEnabled, also stores embedding asynchronously (fire-and-forget).
  */
-export function addUserMessage(sessionId: string, content: string): void {
+export function addUserMessage(sessionId: string, content: string, vectorEnabled: boolean = false): void {
   const session = getOrCreate(sessionId);
   const msg: UserMessage = {
     role: "user",
@@ -102,13 +193,18 @@ export function addUserMessage(sessionId: string, content: string): void {
     timestamp: Date.now(),
   };
   session.messages.push(msg);
-  remember(sessionId, "user", content);
+  if (vectorEnabled) {
+    rememberAsync(sessionId, "user", content, true)
+      .catch((err) => logger.warn(`rememberAsync failed: ${err instanceof Error ? err.message : err}`));
+  } else {
+    remember(sessionId, "user", content);
+  }
 }
 
 /**
  * Add an assistant message — saves to both short-term and long-term memory.
  */
-export function addAssistantMessage(sessionId: string, message: AssistantMessage): void {
+export function addAssistantMessage(sessionId: string, message: AssistantMessage, vectorEnabled: boolean = false): void {
   const session = getOrCreate(sessionId);
   session.messages.push(message);
 
@@ -118,7 +214,12 @@ export function addAssistantMessage(sessionId: string, message: AssistantMessage
     .map((c) => (c as { type: "text"; text: string }).text)
     .join("");
   if (text) {
-    remember(sessionId, "assistant", text);
+    if (vectorEnabled) {
+      rememberAsync(sessionId, "assistant", text, true)
+        .catch((err) => logger.warn(`rememberAsync failed: ${err instanceof Error ? err.message : err}`));
+    } else {
+      remember(sessionId, "assistant", text);
+    }
   }
 }
 

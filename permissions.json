@@ -12,7 +12,12 @@
     "start_server",
     "stop_server",
     "list_servers",
-    "search_memory"
+    "search_memory",
+    "remember_fact",
+    "query_facts",
+    "load_skill",
+    "update_memory_status",
+    "complete_project"
   ],
   "shell": {
     "blockedCommands": ["shutdown", "reboot", "halt", "mkfs", "dd", "passwd", "chown", "chmod"],

@@ -1,3 +1,9 @@
+---
+title: Calendar Actions
+description: Create, find, edit, and remove calendar events. Defaults to the Personal calendar.
+shortcuts: [newCalendarEvent, findCalendarEvents, editCalendarEvent, removeCalendarEvent]
+---
+
 ### newCalendarEvent
 
 Shortcut name: `newCalendarEvent`

@@ -10,6 +10,8 @@ import { Database } from "bun:sqlite";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { mkdirSync, existsSync } from "fs";
+import { storeVector, searchSemantic, type VectorSearchResult } from "./vector-memory.js";
+import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DATA_DIR = join(PROJECT_ROOT, "data");
@@ -86,13 +88,33 @@ function formatDate(ts: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-export function remember(sessionId: string, role: string, content: string): void {
+export function remember(sessionId: string, role: string, content: string): number {
   const d = getDb();
   const now = Date.now();
-  d.run(
+  const result = d.run(
     "INSERT INTO messages (session_id, role, content, timestamp, date_str) VALUES (?, ?, ?, ?, ?)",
     [sessionId, role, content, now, formatDate(now)],
   );
+  return Number(result.lastInsertRowid);
+}
+
+/**
+ * Store a message in both FTS5 (sync) and vector memory (async).
+ * Vector storage is fire-and-forget — failures don't block the request.
+ */
+export async function rememberAsync(
+  sessionId: string,
+  role: string,
+  content: string,
+  vectorEnabled: boolean,
+  wing?: string,
+  room?: string,
+): Promise<void> {
+  const messageId = remember(sessionId, role, content);
+  if (vectorEnabled) {
+    storeVector(messageId, content, wing ?? "general", room, undefined, role)
+      .catch((err) => logger.warn(`Vector store failed for message #${messageId}: ${err instanceof Error ? err.message : err}`));
+  }
 }
 
 /**
@@ -163,4 +185,100 @@ export function cleanOldMemories(retentionMs: number): number {
   const cutoff = Date.now() - retentionMs;
   const result = d.run("DELETE FROM messages WHERE timestamp < ?", [cutoff]);
   return result.changes;
+}
+
+/**
+ * Get the path to memory.db (for cross-DB operations like migration).
+ */
+export function getDbPath(): string {
+  return DB_PATH;
+}
+
+/**
+ * Fetch messages by their IDs (for resolving vector search results).
+ */
+export function getMessagesByIds(ids: number[]): MemoryEntry[] {
+  if (ids.length === 0) return [];
+  const d = getDb();
+  const placeholders = ids.map(() => "?").join(",");
+  return d.query(
+    `SELECT role, content, timestamp, date_str as dateStr, session_id as sessionId FROM messages WHERE id IN (${placeholders})`,
+  ).all(...ids) as MemoryEntry[];
+}
+
+/**
+ * Hybrid recall: merge FTS5 keyword results with vector semantic results.
+ * Uses reciprocal rank fusion to combine both rankings.
+ */
+export async function recallHybrid(
+  query: string,
+  topK: number = 5,
+  vectorEnabled: boolean = false,
+  sessionId?: string,
+  skipRecent: number = 0,
+  filters?: { wings?: string[]; wing?: string; room?: string },
+): Promise<MemoryEntry[]> {
+  // Always run FTS5
+  const ftsResults = recall(query, topK * 2, sessionId, skipRecent);
+
+  if (!vectorEnabled) return ftsResults.slice(0, topK);
+
+  // Run vector search — first try with filters, fall back to unfiltered if no results
+  let vectorResults: VectorSearchResult[];
+  try {
+    vectorResults = await searchSemantic(query, topK * 2, filters);
+    // If filtered search returned nothing, retry without filters
+    if (vectorResults.length === 0 && filters && (filters.wings?.length || filters.wing || filters.room)) {
+      vectorResults = await searchSemantic(query, topK * 2);
+    }
+  } catch {
+    // Vector search failed — fall back to FTS5 only
+    return ftsResults.slice(0, topK);
+  }
+
+  if (vectorResults.length === 0) return ftsResults.slice(0, topK);
+
+  // Resolve vector results to full MemoryEntry objects
+  const vectorMessageIds = vectorResults.map((r) => r.messageId);
+  const vectorMessages = getMessagesByIds(vectorMessageIds);
+  const vectorMessageMap = new Map<string, MemoryEntry>();
+  for (const m of vectorMessages) {
+    vectorMessageMap.set(`${m.sessionId}:${m.timestamp}`, m);
+  }
+
+  // Reciprocal rank fusion (k=60)
+  const k = 60;
+  const scores = new Map<string, { score: number; entry: MemoryEntry }>();
+
+  for (let i = 0; i < ftsResults.length; i++) {
+    const entry = ftsResults[i]!;
+    const key = `${entry.sessionId}:${entry.timestamp}`;
+    const existing = scores.get(key);
+    const rrf = 1 / (k + i + 1);
+    if (existing) {
+      existing.score += rrf;
+    } else {
+      scores.set(key, { score: rrf, entry });
+    }
+  }
+
+  for (let i = 0; i < vectorResults.length; i++) {
+    const vr = vectorResults[i]!;
+    const msg = vectorMessages.find((m, idx) => vectorMessageIds[idx] === vr.messageId);
+    if (!msg) continue;
+    const key = `${msg.sessionId}:${msg.timestamp}`;
+    const existing = scores.get(key);
+    const rrf = 1 / (k + i + 1);
+    if (existing) {
+      existing.score += rrf;
+    } else {
+      scores.set(key, { score: rrf, entry: msg });
+    }
+  }
+
+  // Sort by combined score, return top-K
+  return [...scores.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .map((s) => s.entry);
 }

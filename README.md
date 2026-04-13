@@ -15,10 +15,14 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and mul
 - **Agent tools** — Shell, file read/write, directory listing, background jobs, web search, web scraping, dev server management
 - **Background jobs** — Schedule one-time or recurring tasks with cron expressions
 - **Dev server management** — Start, stop, and list dev servers for workspace projects with optional HTTPS tunnel exposure
-- **Hot-reloadable skills** — Define shortcuts as `.md` files in `skills/`, no restart needed
+- **Dynamic skills** — Define shortcuts and behavior rules as `.md` files in `skills/` with YAML frontmatter. Only a compact index is loaded into the prompt; full content is fetched on demand via the `load_skill` tool
 - **Self-managing skills** — The agent can create, edit, and delete skill definitions
 - **Agent instructions** — Editable `agent-instructions.md` to customize agent behavior, hot-reloaded
-- **Long-term memory** — SQLite + FTS5 full-text search for context recall across sessions
+- **Semantic memory** — Vector-based search with embeddings (Ollama, LM Studio, or OpenAI) stored in a separate `knowledge.db`. Memories are auto-classified into wing/room/hall/status dimensions by the LLM
+- **Knowledge graph** — Temporal triple store for durable facts with auto-invalidation. Multi-value relationships (children, friends) coexist; single-value facts (lives_in, partner) auto-replace
+- **PARA method** — Every memory is tagged with a status (Project, Area, Resource, Archive). Projects are closed with semantic similarity matching; reference material survives project closures
+- **Hybrid recall** — Combines FTS5 keyword search with vector semantic search using reciprocal rank fusion
+- **Long-term memory** — SQLite + FTS5 full-text search for context recall across sessions (fallback when semantic memory is disabled)
 - **HTTPS tunneling** — Built-in support for Tailscale, ngrok, and Cloudflare Tunnel
 - **System service** — Install as a persistent service on macOS, Linux, or Windows
 - **PocketHook protocol** — Standard `msg`/`shortcut`/`data`/`url` response format via `@pockethook/sdk`
@@ -64,6 +68,7 @@ bun run tunnel    # HTTPS tunnel in another terminal
 | `bun run service restart` | Restart the service |
 | `bun run service uninstall` | Remove the service |
 | `bun run service status` | Show service status |
+| `bun run logs` | Stream service logs (cross-platform) |
 
 ## Configuration
 
@@ -92,6 +97,11 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `LOCALE_CITY` | (auto-detected) | User city for regional context |
 | `LOCALE_TIMEZONE` | (auto-detected) | User timezone |
 | `LLM_BASE_URL` | — | Custom LLM API base URL (required for Ollama/LM Studio, optional for others) |
+| `VECTOR_MEMORY` | `false` | Enable semantic memory (requires an embedding provider) |
+| `EMBEDDING_PROVIDER` | `ollama` | Embedding provider: `ollama`, `lm-studio`, or `openai` |
+| `EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model name |
+| `EMBEDDING_URL` | (auto) | Embedding API URL. Defaults: Ollama `http://localhost:11434`, LM Studio `http://localhost:1234`, OpenAI `https://api.openai.com` |
+| `EMBEDDING_API_KEY` | — | API key for OpenAI embeddings (not needed for Ollama/LM Studio) |
 | `TOOLS` | `all` | Enabled tools (see Permissions) |
 
 ### Supported providers
@@ -205,12 +215,20 @@ bun run service uninstall  # Remove service and tunnel config
 
 ## Skills
 
-Skills are `.md` files in `skills/` that describe iOS Shortcuts the agent can trigger. They are hot-reloaded on each request when modified.
+Skills are `.md` files in `skills/` that define iOS Shortcuts the agent can trigger and/or behavior rules for the agent to follow. They use **dynamic loading**: only a compact index (title, description, shortcut list) is injected into the system prompt. The agent loads the full content on demand via the `load_skill` tool, keeping token usage low as you add more skills.
+
+Each skill file should start with YAML frontmatter:
 
 ```markdown
+---
+title: Notes
+description: Create notes on the user's device with a title and body
+shortcuts: [newNote]
+---
+
 ### New Note
 
-Shortcut name: `New Note`
+Shortcut name: `newNote`
 
 Creates a new note on the user's device.
 
@@ -219,10 +237,12 @@ Data fields:
 - content (string, required): Note body
 
 Example:
-{ "msg": "Creating your note...", "shortcut": "New Note", "data": { "title": "Shopping List", "content": "1. Milk\n2. Eggs" } }
+{ "msg": "Creating your note...", "shortcut": "newNote", "data": { "title": "Shopping List", "content": "1. Milk\n2. Eggs" } }
 ```
 
-The agent can also create and manage skills when asked by the user. See `skills/_example.md` for the template.
+Skills can also be **behavior rules** without shortcuts (e.g., "how to plan a family trip"). Use `shortcuts: []` in the frontmatter for these.
+
+The agent can create and manage skills when asked by the user. See `skills/_example.md` for the full template.
 
 ## Agent Instructions
 
@@ -314,7 +334,7 @@ Custom tools follow the same hot-reload pattern as skills. The agent can create,
 
 Granular tool permissions are stored in `permissions.json` (configure via `bun run permissions` or `bun run setup`):
 
-- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`, `start_server`, `stop_server`, `list_servers`
+- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`, `start_server`, `stop_server`, `list_servers`, `search_memory`, `remember_fact`, `query_facts`, `load_skill`, `update_memory_status`, `complete_project`
 - **Working directory boundary** — Prevents the agent from escaping `WORKING_DIR`
 - **Blocked shell commands** — e.g., `sudo`, `rm -rf /`, `shutdown`
 - **Blocked shell patterns** — Regex patterns like `curl.*\|.*sh`
@@ -334,12 +354,37 @@ The versioning system is invisible to the user. The agent knows how to undo and 
 
 ## Memory
 
-SQLite with FTS5 full-text search for long-term memory (`data/memory.db`):
+The memory system has three layers, each stored in its own database:
+
+### Conversation memory (`data/memory.db`)
+
+SQLite with FTS5 full-text search. All messages are stored with timestamps and session IDs. FTS5 provides keyword-based recall across sessions.
 
 - **Short-term** — Last N messages kept in memory per session
-- **Long-term** — All messages stored in SQLite, searched via FTS5
-- Recalled memories are injected into context with timestamps
+- **Long-term** — All messages persisted in SQLite, searched via FTS5
 - Sessions expire after `SESSION_TTL_MINUTES`, but long-term memory persists
+
+### Semantic memory (`data/knowledge.db`) — optional
+
+Requires `VECTOR_MEMORY=true` and an embedding provider (Ollama, LM Studio, or OpenAI).
+
+**Vector store** — Each message is embedded and stored with palace-style metadata, auto-classified by the LLM:
+- **Wing** — The entity the message is about (`user`, `person:john`, `project:blog`, `place:london`, etc.)
+- **Room** — The type of memory (`facts`, `preferences`, `events`, `decisions`, `requests`, `context`, etc.)
+- **Hall** — The topic (`personal`, `tech`, `health`, `travel`, `food`, `work`, etc.)
+- **Status** — PARA classification (`project`, `area`, `resource`, `archive`)
+
+**Knowledge graph** — Temporal triple store for structured facts:
+- Triples: `(subject, predicate, object)` with `valid_from` / `valid_until`
+- Single-value predicates (`lives_in`, `partner`) auto-invalidate the old value on update
+- Multi-value predicates (`child`, `friend`, `sibling`, `hobby`) coexist without invalidation
+- Project-specific predicates use slugs (`scheduled_visit_london`, `scheduled_visit_tokyo`) so concurrent projects don't overwrite each other
+
+**Hybrid recall** — `buildContext()` merges FTS5 keyword results with vector semantic results using reciprocal rank fusion. Entity extraction from the user's query focuses the vector search on relevant wings. Knowledge graph facts are injected alongside recalled memories.
+
+**PARA lifecycle** — When a project completes or is cancelled, `complete_project` uses semantic similarity to archive only the relevant project's vectors while preserving reference material (lists, recommendations) as `resource` for future use.
+
+If `VECTOR_MEMORY` is disabled or the embedding provider is unreachable, the system falls back to FTS5-only with no errors.
 
 ## Project structure
 
@@ -349,24 +394,28 @@ pockethook-agent-server/
 │   ├── index.ts          # HTTP server, routing, job delivery
 │   ├── config.ts         # Config loading, system prompt, hot-reload
 │   ├── dashboard.ts      # Web dashboard HTML and jobs API
-│   ├── llm.ts            # Agent execution, LLM communication
-│   ├── tools.ts          # Tool implementations (shell, read, write, ls, jobs, servers)
+│   ├── llm.ts            # Agent execution, LLM communication, quickPrompt
+│   ├── tools.ts          # Tool implementations (shell, files, jobs, memory, skills)
+│   ├── embeddings.ts     # Multi-provider embedding client (Ollama, LM Studio, OpenAI)
+│   ├── vector-memory.ts  # Palace-style vector store with LLM classification
+│   ├── knowledge-graph.ts # Temporal triple store with auto-invalidation
 │   ├── custom-tools.ts   # Custom tool loader (hot-reload from custom-tools/*.md)
 │   ├── servers.ts        # Dev server process manager (start/stop/list, tunnel)
 │   ├── versioning.ts     # Workspace git + config backups
 │   ├── jobs.ts           # Background job system, cron scheduler
 │   ├── logger.ts         # Structured logging with level filtering
+│   ├── logs.ts           # Cross-platform service log viewer
 │   ├── rate-limit.ts     # Per-token rate limiting
 │   ├── permissions.ts    # Permission enforcement
-│   ├── sessions.ts       # Session management, memory context
-│   ├── memory.ts         # SQLite + FTS5 long-term memory
+│   ├── sessions.ts       # Session management, hybrid recall, knowledge graph injection
+│   ├── memory.ts         # SQLite + FTS5 + hybrid recall (vector + keyword fusion)
 │   ├── setup.ts          # Interactive CLI setup
 │   ├── service.ts        # System service management
 │   ├── tunnel.ts         # HTTPS tunnel setup
 │   └── dev-tunnel.ts     # Combined dev server + tunnel
 ├── skills/               # Hot-reloadable shortcut definitions
 ├── custom-tools/         # Hot-reloadable custom tool definitions
-├── data/                 # Runtime data (SQLite, service metadata, backups)
+├── data/                 # Runtime data (memory.db, knowledge.db, service metadata, backups)
 ├── workspace/            # Agent's working directory
 │   └── dashboard/        # Custom dashboard files (hot-reloaded)
 ├── agent-instructions.md # Editable agent behavior (hot-reloaded)

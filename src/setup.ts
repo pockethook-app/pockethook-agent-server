@@ -309,6 +309,77 @@ async function setup() {
 
   await configureAuth(provider, env);
 
+  // Semantic memory (optional, requires Ollama)
+  const enableSemantic = await p.confirm({
+    message: "Enable semantic memory? (requires Ollama running locally)",
+    initialValue: env.VECTOR_MEMORY === "true",
+  });
+  if (p.isCancel(enableSemantic)) cancelled();
+
+  if (enableSemantic) {
+    env.VECTOR_MEMORY = "true";
+
+    const embeddingProvider = await p.select({
+      message: "Embedding provider",
+      options: [
+        { value: "ollama", label: "Ollama (local)", hint: "Free, runs locally. Requires: ollama pull <model>" },
+        { value: "lm-studio", label: "LM Studio (local)", hint: "Free, runs locally. Load an embedding model in LM Studio" },
+        { value: "openai", label: "OpenAI API", hint: "Requires API key. Models: text-embedding-3-small, text-embedding-3-large" },
+      ],
+      initialValue: env.EMBEDDING_PROVIDER || "ollama",
+    });
+    if (p.isCancel(embeddingProvider)) cancelled();
+    env.EMBEDDING_PROVIDER = embeddingProvider;
+
+    const defaultModels: Record<string, string> = {
+      ollama: "nomic-embed-text",
+      "lm-studio": "nomic-embed-text-v1.5",
+      openai: "text-embedding-3-small",
+    };
+
+    const defaultUrls: Record<string, string> = {
+      ollama: "http://localhost:11434",
+      "lm-studio": "http://localhost:1234",
+      openai: "https://api.openai.com",
+    };
+
+    const embeddingModel = await p.text({
+      message: "Embedding model",
+      initialValue: env.EMBEDDING_MODEL || defaultModels[embeddingProvider] || "nomic-embed-text",
+    });
+    if (p.isCancel(embeddingModel)) cancelled();
+    env.EMBEDDING_MODEL = embeddingModel;
+
+    const embeddingUrl = await p.text({
+      message: "Embedding API URL",
+      initialValue: env.EMBEDDING_URL || defaultUrls[embeddingProvider] || "http://localhost:11434",
+    });
+    if (p.isCancel(embeddingUrl)) cancelled();
+    env.EMBEDDING_URL = embeddingUrl;
+
+    if (embeddingProvider === "openai") {
+      const embeddingApiKey = await p.password({
+        message: "OpenAI API key for embeddings",
+      });
+      if (p.isCancel(embeddingApiKey)) cancelled();
+      env.EMBEDDING_API_KEY = embeddingApiKey;
+    } else {
+      delete env.EMBEDDING_API_KEY;
+    }
+
+    if (embeddingProvider === "ollama") {
+      p.log.info(`Run ${pc.cyan(`ollama pull ${embeddingModel}`)} before starting the server.`);
+    } else if (embeddingProvider === "lm-studio") {
+      p.log.info(`Load an embedding model in LM Studio before starting the server.`);
+    }
+  } else {
+    env.VECTOR_MEMORY = "false";
+    delete env.EMBEDDING_PROVIDER;
+    delete env.EMBEDDING_URL;
+    delete env.EMBEDDING_MODEL;
+    delete env.EMBEDDING_API_KEY;
+  }
+
   // Permissions
   const configPerms = await p.confirm({
     message: "Configure tool permissions?",
@@ -420,6 +491,11 @@ async function configurePermissions() {
       { value: "delete_job", label: "delete_job", hint: "Delete background jobs" },
       { value: "web_search", label: "web_search", hint: "Search the web" },
       { value: "web_fetch", label: "web_fetch", hint: "Fetch and read web pages" },
+      { value: "remember_fact", label: "remember_fact", hint: "Store facts in knowledge graph (requires semantic memory)" },
+      { value: "query_facts", label: "query_facts", hint: "Query facts from knowledge graph (requires semantic memory)" },
+      { value: "load_skill", label: "load_skill", hint: "Load full content of a skill on demand (recommended)" },
+      { value: "update_memory_status", label: "update_memory_status", hint: "Change PARA status of memories (project/area/resource/archive)" },
+      { value: "complete_project", label: "complete_project", hint: "Close a project: archive events, keep resources (PARA transition)" },
     ],
     initialValues: current.tools,
     required: false,

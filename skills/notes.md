@@ -1,3 +1,9 @@
+---
+title: Notes
+description: Create notes on the user's device with a title and body
+shortcuts: [newNote]
+---
+
 ### New Note
 
 Shortcut name: `newNote`

@@ -1,3 +1,9 @@
+---
+title: Tasks & Reminders
+description: Create reminder lists and add tasks to them. Use when the user mentions to-dos, lists, reminders, shopping lists, etc.
+shortcuts: [newTaskList, addTasks]
+---
+
 ### newTaskList
 
 Shortcut name: `newTaskList`

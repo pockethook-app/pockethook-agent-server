@@ -632,18 +632,54 @@ function createListServersTool(): AgentTool<typeof listServersSchema> {
 const searchMemorySchema = Type.Object({
   query: Type.String({ description: "Search query — keywords or phrases to find in past conversations" }),
   limit: Type.Optional(Type.Number({ description: "Max results to return (default: 10, max: 20)" })),
+  semantic: Type.Optional(Type.Boolean({ description: "Use semantic (vector) search instead of keyword search. Better for conceptual queries. Default: false" })),
+  wing: Type.Optional(Type.String({ description: "Filter by wing (entity). E.g., 'user', 'project:blog', 'person:juan'" })),
+  room: Type.Optional(Type.String({ description: "Filter by room (memory type). E.g., 'decisions', 'preferences', 'events', 'facts', 'context'" })),
+  status: Type.Optional(Type.String({ description: "Filter by PARA status: 'project' (active with outcome), 'area' (ongoing), 'resource' (reference), 'archive' (inactive). If omitted, archived items are excluded by default." })),
+  include_archived: Type.Optional(Type.Boolean({ description: "Include archived items in results. Default: false" })),
 });
 
-function createSearchMemoryTool(): AgentTool<typeof searchMemorySchema> {
+function createSearchMemoryTool(configRef?: Config): AgentTool<typeof searchMemorySchema> {
   return {
     name: "search_memory",
     label: "Search conversation history",
-    description: "Search past conversations stored in long-term memory. Use this when the user refers to something discussed before, or when you need to find details from a previous exchange (e.g., field names, shortcut names, decisions made).",
+    description: "Search past conversations stored in long-term memory. Use this when the user refers to something discussed before, or when you need to find details from a previous exchange (e.g., field names, shortcut names, decisions made). Supports semantic search with wing/room filters when semantic memory is enabled.",
     parameters: searchMemorySchema,
     async execute(_id, params) {
       try {
-        const { recall } = await import("./memory.js");
         const limit = Math.min(params.limit ?? 10, 20);
+        const vectorEnabled = configRef?.vectorMemoryEnabled ?? false;
+
+        if (params.semantic && vectorEnabled) {
+          const { searchSemantic } = await import("./vector-memory.js");
+          const { getMessagesByIds } = await import("./memory.js");
+          const filters: { wing?: string; room?: string; status?: string; includeArchived?: boolean } = {};
+          if (params.wing) filters.wing = params.wing;
+          if (params.room) filters.room = params.room;
+          if (params.status) filters.status = params.status;
+          if (params.include_archived) filters.includeArchived = true;
+
+          const vectorResults = await searchSemantic(params.query, limit, filters);
+          if (vectorResults.length === 0) {
+            return {
+              content: [{ type: "text", text: `No semantic results found for: ${params.query}` }],
+              details: { count: 0 },
+            };
+          }
+
+          const messages = getMessagesByIds(vectorResults.map((r) => r.messageId));
+          const formatted = messages.map((r) =>
+            `[${r.dateStr}] ${r.role}: ${r.content}`
+          ).join("\n\n");
+
+          return {
+            content: [{ type: "text", text: formatted }],
+            details: { count: messages.length, mode: "semantic" },
+          };
+        }
+
+        // Default: FTS5 keyword search
+        const { recall } = await import("./memory.js");
         const results = recall(params.query, limit);
 
         if (results.length === 0) {
@@ -659,7 +695,7 @@ function createSearchMemoryTool(): AgentTool<typeof searchMemorySchema> {
 
         return {
           content: [{ type: "text", text: formatted }],
-          details: { count: results.length },
+          details: { count: results.length, mode: "keyword" },
         };
       } catch (err: any) {
         return {
@@ -671,11 +707,197 @@ function createSearchMemoryTool(): AgentTool<typeof searchMemorySchema> {
   };
 }
 
+// ── Knowledge graph tools ───────────────────────────────────────────────
+
+const rememberFactSchema = Type.Object({
+  subject: Type.String({ description: "The entity (e.g., 'user', 'John', 'project-blog')" }),
+  predicate: Type.String({ description: "The relationship/property (e.g., 'lives_in', 'prefers', 'works_at')" }),
+  object: Type.String({ description: "The value (e.g., 'Madrid', 'dark mode', 'Google')" }),
+});
+
+function createRememberFactTool(): AgentTool<typeof rememberFactSchema> {
+  return {
+    name: "remember_fact",
+    label: "Store a fact in the knowledge graph",
+    description: "Store a durable fact as a triple (subject, predicate, object). Use this when the user shares factual information about themselves or their world (preferences, locations, relationships, etc.). For single-value facts (lives_in, partner), the old value is auto-invalidated when it changes. For multi-value facts (child, friend, colleague, hobby, pet, skill, language), multiple values coexist — call this once per value (e.g., one call per child, one call per friend).",
+    parameters: rememberFactSchema,
+    async execute(_id, params) {
+      try {
+        const { addTriple } = await import("./knowledge-graph.js");
+        const id = addTriple(params.subject, params.predicate, params.object);
+        return {
+          content: [{ type: "text", text: `Fact stored: ${params.subject} → ${params.predicate} → ${params.object} (id: ${id})` }],
+          details: { tripleId: id },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error storing fact: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
+const queryFactsSchema = Type.Object({
+  subject: Type.String({ description: "Entity to query facts about (e.g., 'user', 'John', 'project-blog')" }),
+  predicate: Type.Optional(Type.String({ description: "Optional: specific relationship to query (e.g., 'lives_in', 'prefers')" })),
+  include_expired: Type.Optional(Type.Boolean({ description: "Include facts that are no longer valid (default: false)" })),
+});
+
+function createQueryFactsTool(): AgentTool<typeof queryFactsSchema> {
+  return {
+    name: "query_facts",
+    label: "Query the knowledge graph",
+    description: "Retrieve stored facts about an entity from the knowledge graph. Returns currently valid facts by default. Use this to recall preferences, relationships, locations, and other structured information.",
+    parameters: queryFactsSchema,
+    async execute(_id, params) {
+      try {
+        const { queryTriples } = await import("./knowledge-graph.js");
+        const activeOnly = !params.include_expired;
+        const results = queryTriples(params.subject, params.predicate, activeOnly);
+
+        if (results.length === 0) {
+          return {
+            content: [{ type: "text", text: `No facts found for: ${params.subject}${params.predicate ? ` → ${params.predicate}` : ""}` }],
+            details: { count: 0 },
+          };
+        }
+
+        const formatted = results.map((t) => {
+          const since = new Date(t.validFrom).toISOString().slice(0, 10);
+          let line = `${t.subject} → ${t.predicate} → ${t.object} [since ${since}]`;
+          if (t.validUntil) {
+            const until = new Date(t.validUntil).toISOString().slice(0, 10);
+            line = `${t.subject} → ${t.predicate} → ${t.object} [${since} → expired ${until}]`;
+          }
+          return line;
+        }).join("\n");
+
+        return {
+          content: [{ type: "text", text: formatted }],
+          details: { count: results.length },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Knowledge graph error: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
+// ── Update memory status tool (PARA) ─────────────────────────────────────
+
+const updateStatusSchema = Type.Object({
+  wing: Type.String({ description: "The entity whose memories should be updated (e.g., 'project:blog', 'person:juan')" }),
+  status: Type.String({ description: "New PARA status: 'project' (active with outcome), 'area' (ongoing), 'resource' (reference), 'archive' (completed/cancelled/inactive)" }),
+  room: Type.Optional(Type.String({ description: "Optional: only update memories matching this room (e.g., 'events', 'decisions')" })),
+});
+
+function createUpdateStatusTool(): AgentTool<typeof updateStatusSchema> {
+  return {
+    name: "update_memory_status",
+    label: "Update PARA status of memories",
+    description: "Change the PARA status of stored memories. Use this to mark a project as complete/cancelled (set status to 'archive'), promote an area to a project when it gets a deadline, or file reference material. Operates on all memories matching a wing (and optionally a room).",
+    parameters: updateStatusSchema,
+    async execute(_id, params) {
+      try {
+        const { updateStatus } = await import("./vector-memory.js");
+        const count = updateStatus(params.wing, params.status, params.room);
+        return {
+          content: [{ type: "text", text: `Updated ${count} memories for wing="${params.wing}"${params.room ? `, room="${params.room}"` : ""} → status="${params.status}"` }],
+          details: { updated: count },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error updating status: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
+// ── Complete project tool (PARA transition) ─────────────────────────────
+
+const completeProjectSchema = Type.Object({
+  project_description: Type.String({ description: "A short description identifying the specific project to close (e.g., 'trip to Japan June 2026', 'writing scifi novel', 'blog redesign'). Semantic similarity is used to find only the vectors related to THIS project, leaving other concurrent projects untouched." }),
+  hall: Type.Optional(Type.String({ description: "Optional hall filter to narrow the scope (e.g., 'travel', 'work'). Default: no filter, scans all project-status vectors." })),
+  threshold: Type.Optional(Type.Number({ description: "Similarity threshold 0-1 (default 0.55). Higher = stricter matching. Only vectors above this threshold are affected." })),
+});
+
+function createCompleteProjectTool(): AgentTool<typeof completeProjectSchema> {
+  return {
+    name: "complete_project",
+    label: "Complete or cancel a project (PARA)",
+    description: "Close a specific project using PARA-style transition. Uses semantic similarity on a project description so only the relevant project is affected — NOT every project in the same hall. Events/decisions/requests related to the project are archived, while reference material (lists, recommendations, how-tos) is preserved as 'resource'. Call this when the user cancels or completes a project. Provide a precise description that identifies THIS project uniquely (include destination, topic, dates, or project name).",
+    parameters: completeProjectSchema,
+    async execute(_id, params) {
+      try {
+        const { completeProject } = await import("./vector-memory.js");
+        const result = await completeProject(params.project_description, {
+          hall: params.hall,
+          threshold: params.threshold,
+        });
+        return {
+          content: [{ type: "text", text: `Project "${params.project_description}" closed: scanned ${result.scanned} project vectors, ${result.archived} archived, ${result.keptAsResource} kept as resource.` }],
+          details: result,
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error completing project: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
+// ── Load skill tool ──────────────────────────────────────────────────────
+
+const loadSkillSchema = Type.Object({
+  name: Type.String({ description: "Name of the skill to load (filename without extension)" }),
+});
+
+function createLoadSkillTool(): AgentTool<typeof loadSkillSchema> {
+  return {
+    name: "load_skill",
+    label: "Load skill content",
+    description: "Load the full content of a skill by name. Use this when you need detailed instructions for a skill listed in the 'Available Skills' section. Skills contain shortcut definitions, behavior rules, and usage guidance.",
+    parameters: loadSkillSchema,
+    async execute(_id, params) {
+      try {
+        const { getSkillContent, listSkillNames } = await import("./config.js");
+        const content = getSkillContent(params.name);
+        if (!content) {
+          const available = listSkillNames();
+          return {
+            content: [{ type: "text", text: `Skill "${params.name}" not found. Available skills: ${available.join(", ")}` }],
+            details: { error: "not_found" },
+          };
+        }
+        return {
+          content: [{ type: "text", text: content }],
+          details: { name: params.name, size: content.length },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error loading skill: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
 // ── Tool factory ────────────────────────────────────────────────────────
 
-type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory";
+type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory" | "remember_fact" | "query_facts" | "load_skill" | "update_memory_status" | "complete_project";
 
 export function createTools(cwd: string, perms: Permissions, config?: Config): AgentTool<any>[] {
+  // Note: config is a live reference — vectorMemoryEnabled may change after Ollama health check
   const factories: Record<ToolName, () => AgentTool<any>> = {
     shell: () => createShellTool(cwd, perms),
     read: () => createReadTool(cwd, perms),
@@ -689,7 +911,12 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     start_server: () => createStartServerTool(cwd),
     stop_server: () => createStopServerTool(),
     list_servers: () => createListServersTool(),
-    search_memory: () => createSearchMemoryTool(),
+    search_memory: () => createSearchMemoryTool(config),
+    remember_fact: () => createRememberFactTool(),
+    query_facts: () => createQueryFactsTool(),
+    load_skill: () => createLoadSkillTool(),
+    update_memory_status: () => createUpdateStatusTool(),
+    complete_project: () => createCompleteProjectTool(),
   };
 
   const tools: AgentTool<any>[] = [];

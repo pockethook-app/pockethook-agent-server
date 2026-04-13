@@ -9,7 +9,9 @@ import {
   trimHistory,
   cleanExpiredSessions,
 } from "./sessions.js";
-import { memoryStats } from "./memory.js";
+import { memoryStats, getDbPath } from "./memory.js";
+import { checkEmbeddingAvailable, configure as configureEmbeddings } from "./embeddings.js";
+import { migrateEmbeddings, configureClassifier } from "./vector-memory.js";
 import { loadPermissions } from "./permissions.js";
 import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
 import { getDashboardHtml, getJobsJson, hasDistDashboard, serveDashboardAsset } from "./dashboard.js";
@@ -43,6 +45,33 @@ if (permissions.filesystem.blockedPaths.length > 0) {
 // Initialize jobs system and workspace versioning
 initJobs();
 initWorkspaceGit();
+
+// Semantic memory: check embedding provider availability if enabled
+if (config.vectorMemoryEnabled) {
+  configureEmbeddings({
+    provider: config.embeddingProvider,
+    baseUrl: config.embeddingUrl,
+    model: config.embeddingModel,
+    apiKey: config.embeddingApiKey,
+  });
+  // Configure LLM classifier for room/hall auto-classification
+  configureClassifier(config);
+
+  checkEmbeddingAvailable().then((available) => {
+    if (available) {
+      logger.info(`Semantic memory: enabled (${config.embeddingProvider}/${config.embeddingModel} via ${config.embeddingUrl})`);
+      // Backfill embeddings for existing messages in background
+      migrateEmbeddings(getDbPath()).catch((err) => {
+        logger.warn(`Embedding migration failed: ${err instanceof Error ? err.message : err}`);
+      });
+    } else {
+      config.vectorMemoryEnabled = false;
+      logger.warn(`Semantic memory: disabled (${config.embeddingProvider} unreachable or model not found)`);
+    }
+  });
+} else {
+  logger.info("Semantic memory: disabled (VECTOR_MEMORY not set to true)");
+}
 
 // Locale: use manual config or auto-detect from IP
 if (config.locale) {
@@ -219,12 +248,12 @@ Bun.serve({
       return toResponse(responses(jobResponses));
     }
 
-    addUserMessage(sessionId, chatInput);
+    addUserMessage(sessionId, chatInput, config.vectorMemoryEnabled);
 
     try {
-      // Build context: recent messages + relevant memories from FTS5
-      const messages = buildContext(sessionId, chatInput);
-      const pockethookResponses = await chat(config, getSystemPrompt(config.agentName), messages, tools);
+      // Build context: recent messages + relevant memories (FTS5 + vector if enabled)
+      const messages = await buildContext(sessionId, chatInput, config.vectorMemoryEnabled);
+      const pockethookResponses = await chat(config, getSystemPrompt(config.agentName, config.vectorMemoryEnabled), messages, tools);
 
       // Store summary in session history
       const summaryText = pockethookResponses.map((r) => r.msg).join("\n");
@@ -237,7 +266,7 @@ Bun.serve({
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
         stopReason: "stop",
         timestamp: Date.now(),
-      });
+      }, config.vectorMemoryEnabled);
       trimHistory(sessionId, config.maxHistory);
 
       // Build PocketHook SDK response — pass all fields (msg, shortcut, data, url)
