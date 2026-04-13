@@ -708,5 +708,5 @@ export function updateEnvFile(updates: Record<string, string>): void {
     }
   }
 
-  writeFileSync(envPath, content);
+  writeFileSync(envPath, content, { mode: 0o600 });
 }

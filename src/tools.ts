@@ -523,13 +523,16 @@ const startServerSchema = Type.Object({
   tunnel: Type.Optional(Type.Boolean({ description: "Expose via HTTPS tunnel (Tailscale). Default: false" })),
 });
 
-function createStartServerTool(cwd: string): AgentTool<typeof startServerSchema> {
+function createStartServerTool(cwd: string, perms: Permissions): AgentTool<typeof startServerSchema> {
   return {
     name: "start_server",
     label: "Start a dev server",
     description: "Start a long-running dev server for a workspace project. The server runs in the background and can optionally be exposed via HTTPS tunnel. Use $PORT in the command as a placeholder for the assigned port.",
     parameters: startServerSchema,
     async execute(_id, params) {
+      const check = checkShellPermission(params.command, perms);
+      if (!check.allowed) return denied(check.reason!);
+
       try {
         const resolvedCwd = resolve(cwd, params.cwd);
         const entry = startServer({
@@ -908,7 +911,7 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     delete_job: () => createDeleteJobTool(),
     web_search: () => createWebSearchTool(config!),
     web_fetch: () => createWebFetchTool(),
-    start_server: () => createStartServerTool(cwd),
+    start_server: () => createStartServerTool(cwd, perms),
     stop_server: () => createStopServerTool(),
     list_servers: () => createListServersTool(),
     search_memory: () => createSearchMemoryTool(config),

@@ -14,6 +14,7 @@ import { spawn } from "child_process";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { mkdirSync, existsSync } from "fs";
+import { loadPermissions, checkShellPermission } from "./permissions.js";
 import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -397,6 +398,12 @@ export function markDelivered(ids: number[]): void {
 // ── Job execution ────────────────────────────────────────────────────────
 
 function executeShell(command: string, cwd: string, timeoutMs: number = 60_000): Promise<{ ok: boolean; output: string }> {
+  const perms = loadPermissions();
+  const check = checkShellPermission(command, perms);
+  if (!check.allowed) {
+    return Promise.resolve({ ok: false, output: `Permission denied: ${check.reason}` });
+  }
+
   return new Promise((res) => {
     let output = "";
     const child = spawn("bash", ["-c", command], {

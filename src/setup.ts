@@ -17,19 +17,40 @@ const ENV_PATH = join(PROJECT_ROOT, ".env");
 
 // ── Banner ───────────────────────────────────────────────────────────────
 
-// PocketHook brand colors (teal)
-const teal = (s: string) => `\x1b[38;2;0;128;128m${s}\x1b[0m`;
-const tealDim = (s: string) => `\x1b[38;2;0;100;100m${s}\x1b[0m`;
+function gradientLine(line: string): string {
+  const r0 = 52, g0 = 199, b0 = 89;   // SwiftUI .green (#34C759)
+  const r1 = 0,  g1 = 122, b1 = 255;  // SwiftUI .blue  (#007AFF)
 
-const BANNER = `
-${teal(`  ██████╗  ██████╗  ██████╗██╗  ██╗███████╗████████╗██╗  ██╗ ██████╗  ██████╗ ██╗  ██╗
-  ██╔══██╗██╔═══██╗██╔════╝██║ ██╔╝██╔════╝╚══██╔══╝██║  ██║██╔═══██╗██╔═══██╗██║ ██╔╝
-  ██████╔╝██║   ██║██║     █████╔╝ █████╗     ██║   ███████║██║   ██║██║   ██║█████╔╝
-  ██╔═══╝ ██║   ██║██║     ██╔═██╗ ██╔══╝     ██║   ██╔══██║██║   ██║██║   ██║██╔═██╗
-  ██║     ╚██████╔╝╚██████╗██║  ██╗███████╗   ██║   ██║  ██║╚██████╔╝╚██████╔╝██║  ██╗
-  ╚═╝      ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝`)}
-${tealDim("                              agent server")}
-`;
+  const visible = [...line].filter((c) => c.trim().length > 0);
+  const total = visible.length || 1;
+  let vi = 0;
+  let out = "";
+  for (const ch of line) {
+    if (ch.trim().length === 0) {
+      out += ch;
+    } else {
+      const t = vi / (total - 1 || 1);
+      const r = Math.round(r0 + (r1 - r0) * t);
+      const g = Math.round(g0 + (g1 - g0) * t);
+      const b = Math.round(b0 + (b1 - b0) * t);
+      out += `\x1b[38;2;${r};${g};${b}m${ch}`;
+      vi++;
+    }
+  }
+  return out + "\x1b[0m";
+}
+
+const BANNER_LINES = [
+  "  ██████╗  ██████╗  ██████╗██╗  ██╗███████╗████████╗██╗  ██╗ ██████╗  ██████╗ ██╗  ██╗",
+  "  ██╔══██╗██╔═══██╗██╔════╝██║ ██╔╝██╔════╝╚══██╔══╝██║  ██║██╔═══██╗██╔═══██╗██║ ██╔╝",
+  "  ██████╔╝██║   ██║██║     █████╔╝ █████╗     ██║   ███████║██║   ██║██║   ██║█████╔╝",
+  "  ██╔═══╝ ██║   ██║██║     ██╔═██╗ ██╔══╝     ██║   ██╔══██║██║   ██║██║   ██║██╔═██╗",
+  "  ██║     ╚██████╔╝╚██████╗██║  ██╗███████╗   ██║   ██║  ██║╚██████╔╝╚██████╔╝██║  ██╗",
+  "  ╚═╝      ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝",
+];
+
+const BANNER = "\n" + BANNER_LINES.map(gradientLine).join("\n") + "\n" +
+  gradientLine("                              agent server") + "\n";
 
 // ── Env helpers ──────────────────────────────────────────────────────────
 
@@ -49,7 +70,7 @@ function readEnv(): Record<string, string> {
 
 function writeEnv(env: Record<string, string>): void {
   const lines = Object.entries(env).map(([k, v]) => `${k}=${v}`);
-  writeFileSync(ENV_PATH, lines.join("\n") + "\n");
+  writeFileSync(ENV_PATH, lines.join("\n") + "\n", { mode: 0o600 });
 }
 
 function cancelled(): never {
@@ -205,9 +226,27 @@ async function configureAuth(provider: ProviderEntry, env: Record<string, string
 
 // ── Commands ─────────────────────────────────────────────────────────────
 
+const SECURITY_NOTICE = `
+${pc.bold(pc.yellow("SECURITY NOTICE"))}
+
+This server gives an AI agent access to your system via shell,
+file read/write, web access, and background jobs. By default,
+dangerous commands and sensitive files are blocked, but no
+sandboxing is enforced — the agent runs with your user privileges.
+
+${pc.bold("Recommendations:")}
+${pc.dim("•")} Expose the server only through trusted networks (e.g. Tailscale)
+${pc.dim("•")} Review permissions.json and adjust blocked commands/paths
+${pc.dim("•")} Never install skills or custom tools without reading their
+  source code first — they can execute shell commands and
+  access your filesystem
+${pc.dim("•")} For stronger isolation, run the server inside a container
+`;
+
 async function setup() {
   console.clear();
   console.log(BANNER);
+  p.note(SECURITY_NOTICE.trim(), pc.yellow("⚠"));
   p.intro(pc.bgGreen(pc.black(" setup ")));
 
   const env = readEnv();

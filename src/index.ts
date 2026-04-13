@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "pockethook-sdk";
 import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale } from "./config.js";
 import { chat } from "./llm.js";
@@ -14,7 +15,7 @@ import { checkEmbeddingAvailable, configure as configureEmbeddings } from "./emb
 import { migrateEmbeddings, configureClassifier } from "./vector-memory.js";
 import { loadPermissions } from "./permissions.js";
 import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
-import { getDashboardHtml, getJobsJson, hasDistDashboard, serveDashboardAsset } from "./dashboard.js";
+import { getDashboardHtml, getJobsJson, hasDistDashboard, serveDashboardAsset, getDashboardToken } from "./dashboard.js";
 import { initWorkspaceGit } from "./versioning.js";
 import { cleanupServers } from "./servers.js";
 import { checkRateLimit, configureRateLimit } from "./rate-limit.js";
@@ -136,13 +137,21 @@ Bun.serve({
       // Serve index HTML (dist/index.html > dashboard.html > built-in default)
       return new Response(getDashboardHtml(), {
         status: 200,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "X-Frame-Options": "DENY",
+          "X-Content-Type-Options": "nosniff",
+        },
       });
     }
 
     if (req.method === "GET" && url.pathname === "/api/jobs") {
       if (!config.dashboardEnabled) {
         return new Response("Not Found", { status: 404 });
+      }
+      const dtk = req.headers.get("X-Dashboard-Token");
+      if (dtk !== getDashboardToken()) {
+        return new Response("Forbidden", { status: 403 });
       }
       return new Response(JSON.stringify(getJobsJson()), {
         status: 200,
@@ -155,7 +164,11 @@ Bun.serve({
     }
 
     const token = extractBearerToken(req.headers.get("Authorization"));
-    if (token !== config.authToken) {
+    if (
+      !token ||
+      token.length !== config.authToken.length ||
+      !timingSafeEqual(Buffer.from(token), Buffer.from(config.authToken))
+    ) {
       return new Response("Unauthorized", { status: 401 });
     }
 
@@ -169,16 +182,17 @@ Bun.serve({
       });
     }
 
-    // Request size limit (1MB)
-    const contentLength = req.headers.get("Content-Length");
-    if (contentLength && parseInt(contentLength, 10) > 1_048_576) {
+    // Request size limit (1MB) — read raw body to enforce regardless of headers
+    const MAX_BODY = 1_048_576;
+    const rawBody = await req.arrayBuffer();
+    if (rawBody.byteLength > MAX_BODY) {
       return new Response("Payload Too Large", { status: 413 });
     }
 
     let sessionId: string;
     let chatInput: string;
     try {
-      const parsed = parseRequest(await req.json());
+      const parsed = parseRequest(JSON.parse(new TextDecoder().decode(rawBody)));
       sessionId = parsed.sessionId;
       chatInput = parsed.chatInput;
     } catch (err) {

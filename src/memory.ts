@@ -145,20 +145,21 @@ export function recall(query: string, topK: number = 5, sessionId?: string, skip
     excludeIds = recent.map((r) => r.id);
   }
 
-  const excludeClause = excludeIds.length > 0
-    ? `AND m.id NOT IN (${excludeIds.join(",")})`
+  const excludePlaceholders = excludeIds.length > 0
+    ? `AND m.id NOT IN (${excludeIds.map(() => "?").join(",")})`
     : "";
 
   try {
+    const params: (string | number)[] = [cleanQuery, ...excludeIds, topK];
     const results = d.query(`
       SELECT m.role, m.content, m.timestamp, m.date_str as dateStr, m.session_id as sessionId
       FROM messages m
       JOIN messages_fts f ON m.id = f.rowid
       WHERE messages_fts MATCH ?
-      ${excludeClause}
+      ${excludePlaceholders}
       ORDER BY f.rank
       LIMIT ?
-    `).all(cleanQuery, topK) as MemoryEntry[];
+    `).all(...params) as MemoryEntry[];
 
     return results;
   } catch {
