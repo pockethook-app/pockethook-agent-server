@@ -16,6 +16,7 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and mul
 - **Background jobs** — Schedule one-time or recurring tasks with cron expressions
 - **Dev server management** — Start, stop, and list dev servers for workspace projects with optional HTTPS tunnel exposure
 - **Dynamic skills** — Define shortcuts and behavior rules as `.md` files in `skills/` with YAML frontmatter. Only a compact index is loaded into the prompt; full content is fetched on demand via the `load_skill` tool
+- **Server-side shortcuts** — Execute shortcuts on the Mac server instead of the iOS device via `shortcuts run` CLI. Ideal for iCloud-synced actions (notes, calendar, reminders). Configure per-skill with `target: mac` and optional `sync_app` for automatic iCloud sync
 - **Self-managing skills** — The agent can create, edit, and delete skill definitions
 - **Agent instructions** — Editable `agent-instructions.md` to customize agent behavior, hot-reloaded
 - **Semantic memory** — Vector-based search with embeddings (Ollama, LM Studio, or OpenAI) stored in a separate `knowledge.db`. Memories are auto-classified into wing/room/hall/status dimensions by the LLM
@@ -225,6 +226,8 @@ Each skill file should start with YAML frontmatter:
 title: Notes
 description: Create notes on the user's device with a title and body
 shortcuts: [newNote]
+target: mac
+sync_app: Notes
 ---
 
 ### New Note
@@ -240,6 +243,22 @@ Data fields:
 Example:
 { "msg": "Creating your note...", "shortcut": "newNote", "data": { "title": "Shopping List", "content": "1. Milk\n2. Eggs" } }
 ```
+
+### Frontmatter fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `title` | Yes | Human-readable name |
+| `description` | Yes | One sentence for the skills index |
+| `shortcuts` | Yes | Array of shortcut names. Use `[]` for behavior-only skills |
+| `target` | No | `device` (default) sends to iOS, `mac` executes on the server |
+| `sync_app` | No | App to open in background after server execution to nudge iCloud sync (e.g., `Notes`, `Calendar`). Set to `none` or omit to skip |
+
+### Server-side execution
+
+When a skill has `target: mac`, shortcuts run silently on the Mac server via `shortcuts run` CLI instead of being sent to the iOS device. This is ideal for actions that create iCloud-synced content (notes, reminders, calendar events) — the result syncs to all devices automatically.
+
+If `sync_app` is set, the server briefly opens the app in the background after execution to trigger iCloud sync, then closes it after 5 seconds. The server falls back to device execution if not running on macOS.
 
 Skills can also be **behavior rules** without shortcuts (e.g., "how to plan a family trip"). Use `shortcuts: []` in the frontmatter for these.
 

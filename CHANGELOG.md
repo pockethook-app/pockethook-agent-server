@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-04-14
+
+### Features
+
+- **Server-side shortcut execution** — Run shortcuts on the Mac server via `shortcuts run` CLI instead of sending them to the iOS device. Configure with `target: mac` in skill frontmatter. Ideal for iCloud-synced actions (notes, calendar, reminders)
+- **iCloud sync nudge** — New `sync_app` frontmatter field opens the related app in the background after server-side execution to trigger iCloud sync, then auto-closes it
+- **User onboarding** — New `USER_NAME` and `ONBOARDING_CHAT` env vars. The agent can greet the user by name and offer a brief onboarding chat to learn personal preferences
+- **Respond tool `run_on` field** — Steps can specify `run_on: "server"` or `"device"` to control where shortcuts execute
+
 ## 0.2.2 — 2026-03-30
 
 ### Features
