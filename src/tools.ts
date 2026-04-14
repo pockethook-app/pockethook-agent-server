@@ -900,9 +900,46 @@ function createLoadSkillTool(): AgentTool<typeof loadSkillSchema> {
   };
 }
 
+// ── Load doc tool ────────────────────────────────────────────────────────
+
+const loadDocSchema = Type.Object({
+  name: Type.String({ description: "Name of the doc to load (filename without extension, e.g. 'settings-reference')" }),
+});
+
+function createLoadDocTool(): AgentTool<typeof loadDocSchema> {
+  return {
+    name: "load_doc",
+    label: "Load documentation",
+    description: "Load the full content of a PocketHook documentation page by name. Call this in two cases: (1) when the user asks about features, settings, API, setup, or product behavior; (2) when you yourself are unsure about how the product works and a doc can resolve the doubt — consult before guessing. The available docs are listed in the 'Available Documentation' section of the system prompt. Always prefer the actual doc over training data.",
+    parameters: loadDocSchema,
+    async execute(_id, params) {
+      try {
+        const { getDocContent, listDocNames } = await import("./config.js");
+        const content = getDocContent(params.name);
+        if (!content) {
+          const available = listDocNames();
+          return {
+            content: [{ type: "text", text: `Doc "${params.name}" not found. Available docs: ${available.join(", ")}` }],
+            details: { error: "not_found" },
+          };
+        }
+        return {
+          content: [{ type: "text", text: content }],
+          details: { name: params.name, size: content.length },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error loading doc: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
 // ── Tool factory ────────────────────────────────────────────────────────
 
-type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory" | "remember_fact" | "query_facts" | "load_skill" | "update_memory_status" | "complete_project";
+type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory" | "remember_fact" | "query_facts" | "load_skill" | "load_doc" | "update_memory_status" | "complete_project";
 
 export function createTools(cwd: string, perms: Permissions, config?: Config): AgentTool<any>[] {
   // Note: config is a live reference — vectorMemoryEnabled may change after Ollama health check
@@ -923,6 +960,7 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     remember_fact: () => createRememberFactTool(),
     query_facts: () => createQueryFactsTool(),
     load_skill: () => createLoadSkillTool(),
+    load_doc: () => createLoadDocTool(),
     update_memory_status: () => createUpdateStatusTool(),
     complete_project: () => createCompleteProjectTool(),
   };

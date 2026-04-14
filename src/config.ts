@@ -694,6 +694,118 @@ export function getSyncAppForShortcut(shortcutName: string): string | undefined 
   return meta?.syncApp;
 }
 
+// ── Docs (hot-reloaded from docs/ directory) ────────────────────────────
+
+export const DOCS_DIR = join(PROJECT_ROOT, "docs");
+let cachedDocsIndex: string = "";
+let cachedDocsMtime: number = 0;
+let cachedDocsMap: Map<string, { file: string; title: string; description: string }> = new Map();
+
+export interface DocMeta {
+  name: string;
+  file: string;
+  title: string;
+  description: string;
+}
+
+/**
+ * Get the latest mtime across all files in docs/.
+ */
+function getDocsMaxMtime(): number {
+  if (!existsSync(DOCS_DIR)) return 0;
+  let maxMtime = 0;
+  try {
+    const files = readdirSync(DOCS_DIR).filter((f) => f.endsWith(".md"));
+    for (const file of files) {
+      const mtime = statSync(join(DOCS_DIR, file)).mtimeMs;
+      if (mtime > maxMtime) maxMtime = mtime;
+    }
+  } catch {}
+  return maxMtime;
+}
+
+/**
+ * Parse a doc file's frontmatter.
+ * Expected format:
+ *   ---
+ *   title: "Settings Reference"
+ *   description: "Complete reference for every setting..."
+ *   ---
+ * Falls back to filename + empty description if frontmatter is missing.
+ */
+function parseDocMeta(filename: string, content: string): DocMeta {
+  const name = filename.replace(/\.md$/, "");
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (fmMatch) {
+    const fm = fmMatch[1]!;
+    const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m);
+    const descMatch = fm.match(/^description:\s*["']?(.+?)["']?\s*$/m);
+    return {
+      name,
+      file: filename,
+      title: titleMatch?.[1]?.trim() ?? name,
+      description: descMatch?.[1]?.trim() ?? "",
+    };
+  }
+  return { name, file: filename, title: name, description: "" };
+}
+
+/**
+ * Load doc metadata index from docs/ directory.
+ * Returns a short index for the system prompt and populates the cache map.
+ */
+function loadDocsIndex(): string {
+  cachedDocsMap.clear();
+  if (!existsSync(DOCS_DIR)) return "";
+  try {
+    const files = readdirSync(DOCS_DIR)
+      .filter((f) => f.endsWith(".md"))
+      .sort();
+    if (files.length === 0) return "";
+
+    const entries: string[] = [];
+    for (const file of files) {
+      const content = readFileSync(join(DOCS_DIR, file), "utf-8");
+      const meta = parseDocMeta(file, content);
+      cachedDocsMap.set(meta.name, { file, title: meta.title, description: meta.description });
+      const desc = meta.description ? `: ${meta.description}` : "";
+      entries.push(`- **${meta.name}** — ${meta.title}${desc}`);
+    }
+
+    return (
+      "\n\n## Available Documentation\n\n" +
+      "Use the `load_doc` tool to read the full content of a documentation page in two situations:\n" +
+      "1. **When the user asks** about PocketHook features, settings, API, setup, or any product behavior — load the relevant doc and answer from it rather than from training data.\n" +
+      "2. **When you yourself are unsure** about how the product works, how a setting interacts with others, what the protocol expects, or what a shortcut/intent does — consult the docs before acting or answering. Do not guess if a doc can resolve your doubt.\n\n" +
+      "Always prefer the actual doc over training data — PocketHook-specific details may be recent or specific to this deployment.\n\n" +
+      entries.join("\n")
+    );
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Get the full content of a doc by name.
+ * Used by the load_doc tool.
+ */
+export function getDocContent(name: string): string | null {
+  const meta = cachedDocsMap.get(name);
+  if (!meta) return null;
+  try {
+    return readFileSync(join(DOCS_DIR, meta.file), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get all doc names (for the load_doc tool's error message).
+ */
+export function listDocNames(): string[] {
+  return [...cachedDocsMap.keys()];
+}
+
 /**
  * Get the full system prompt: base (fixed) + skills (hot-reloaded on change).
  */
@@ -746,7 +858,16 @@ export function getSystemPrompt(agentName: string, vectorMemoryEnabled: boolean 
     }
   }
 
-  return BASE_SYSTEM_PROMPT + getPersonality() + formatCurrentDate() + cachedLocalePrompt + getInstructions() + cachedSkillsIndex + getCustomToolsPrompt();
+  const currentDocsMtime = getDocsMaxMtime();
+  if (currentDocsMtime !== cachedDocsMtime) {
+    cachedDocsIndex = loadDocsIndex();
+    cachedDocsMtime = currentDocsMtime;
+    if (cachedDocsIndex) {
+      logger.info(`Docs reloaded (${cachedDocsMap.size} file(s))`);
+    }
+  }
+
+  return BASE_SYSTEM_PROMPT + getPersonality() + formatCurrentDate() + cachedLocalePrompt + getInstructions() + cachedSkillsIndex + cachedDocsIndex + getCustomToolsPrompt();
 }
 
 // ── Config ──────────────────────────────────────────────────────────────

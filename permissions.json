@@ -16,6 +16,7 @@
     "remember_fact",
     "query_facts",
     "load_skill",
+    "load_doc",
     "update_memory_status",
     "complete_project"
   ],

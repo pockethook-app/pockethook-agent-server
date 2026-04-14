@@ -682,6 +682,7 @@ async function configurePermissions() {
       { value: "remember_fact", label: "remember_fact", hint: "Store facts in knowledge graph (requires semantic memory)" },
       { value: "query_facts", label: "query_facts", hint: "Query facts from knowledge graph (requires semantic memory)" },
       { value: "load_skill", label: "load_skill", hint: "Load full content of a skill on demand (recommended)" },
+      { value: "load_doc", label: "load_doc", hint: "Load PocketHook documentation on demand (recommended)" },
       { value: "update_memory_status", label: "update_memory_status", hint: "Change PARA status of memories (project/area/resource/archive)" },
       { value: "complete_project", label: "complete_project", hint: "Close a project: archive events, keep resources (PARA transition)" },
     ],

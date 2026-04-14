@@ -16,6 +16,7 @@ const PERMISSIONS_PATH = join(PROJECT_ROOT, "permissions.json");
 // Paths outside working dir that the agent is allowed to access
 const ALLOWED_EXTERNAL_PATHS = [
   join(PROJECT_ROOT, "skills"),
+  join(PROJECT_ROOT, "docs"),
   join(PROJECT_ROOT, "custom-tools"),
   join(PROJECT_ROOT, "agent-instructions.md"),
 ];
