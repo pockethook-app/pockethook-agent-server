@@ -1,8 +1,8 @@
 import { timingSafeEqual } from "crypto";
 import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "pockethook-sdk";
-import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale } from "./config.js";
+import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale, getSkillTarget, getSyncAppForShortcut } from "./config.js";
 import { chat } from "./llm.js";
-import { createTools } from "./tools.js";
+import { createTools, type PocketHookResponse } from "./tools.js";
 import {
   buildContext,
   addUserMessage,
@@ -89,7 +89,7 @@ const JOB_PREFIX = "[BACKGROUND JOB] You are running inside a background job. Do
 
 const jobChatFn = async (prompt: string): Promise<string> => {
   const jobMessages = [{ role: "user" as const, content: JOB_PREFIX + prompt, timestamp: Date.now() }];
-  const result = await chat(config, getSystemPrompt(config.agentName), jobMessages, tools);
+  const result = await chat(config, getSystemPrompt(config.agentName, false, config.userName, config.onboardingChat), jobMessages, tools);
   return JSON.stringify(result);
 };
 
@@ -104,6 +104,84 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 const API_VERSION = "1";
+
+// ── Server-side shortcut execution (macOS only) ─────────────────────────
+
+const IS_MACOS = process.platform === "darwin";
+
+async function executeShortcutOnServer(
+  name: string,
+  data?: Record<string, unknown> | Record<string, unknown>[],
+  syncApp?: string,
+): Promise<{ success: boolean; error?: string }> {
+  const input = JSON.stringify({
+    context: "server_triggered",
+    timestamp: new Date().toISOString(),
+    app: "PocketHook",
+    data: data ?? {},
+  });
+
+  try {
+    const proc = Bun.spawn(["shortcuts", "run", name], {
+      stdin: new TextEncoder().encode(input),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const timeout = setTimeout(() => proc.kill(), 30_000);
+    const exitCode = await proc.exited;
+    clearTimeout(timeout);
+
+    if (exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      return { success: false, error: stderr.trim() || `Exit code ${exitCode}` };
+    }
+
+    // Nudge iCloud sync: open the app in background, wait, then close it
+    if (syncApp) {
+      Bun.spawn(["open", "-gj", "-a", syncApp], { stdout: "ignore", stderr: "ignore" });
+      setTimeout(() => {
+        Bun.spawn(["osascript", "-e", `tell application "${syncApp}" to quit`], { stdout: "ignore", stderr: "ignore" });
+      }, 5_000);
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function processServerSideShortcuts(
+  pockethookResponses: PocketHookResponse[],
+): Promise<PocketHookResponse[]> {
+  const processed: PocketHookResponse[] = [];
+
+  for (const r of pockethookResponses) {
+    if (r.run_on === "server" && r.shortcut) {
+      if (!IS_MACOS) {
+        logger.warn(`Shortcut "${r.shortcut}" marked as server-side but server is not macOS. Falling back to device.`);
+        const { run_on, ...rest } = r;
+        processed.push(rest);
+        continue;
+      }
+
+      logger.info(`Executing shortcut on server: ${r.shortcut}`);
+      const syncApp = getSyncAppForShortcut(r.shortcut);
+      const result = await executeShortcutOnServer(r.shortcut, r.data as Record<string, unknown> | Record<string, unknown>[] | undefined, syncApp);
+
+      if (result.success) {
+        processed.push({ msg: r.msg, url: r.url });
+      } else {
+        logger.error(`Server shortcut failed: ${r.shortcut}`, { error: result.error });
+        processed.push({ msg: `${r.msg}\n\n⚠ Server execution failed: ${result.error}`, url: r.url });
+      }
+    } else {
+      const { run_on, ...rest } = r;
+      processed.push(rest);
+    }
+  }
+
+  return processed;
+}
 
 Bun.serve({
   port: config.port,
@@ -267,7 +345,10 @@ Bun.serve({
     try {
       // Build context: recent messages + relevant memories (FTS5 + vector if enabled)
       const messages = await buildContext(sessionId, chatInput, config.vectorMemoryEnabled);
-      const pockethookResponses = await chat(config, getSystemPrompt(config.agentName, config.vectorMemoryEnabled), messages, tools);
+      const rawResponses = await chat(config, getSystemPrompt(config.agentName, config.vectorMemoryEnabled, config.userName, config.onboardingChat), messages, tools);
+
+      // Execute server-side shortcuts (macOS only) before sending to device
+      const pockethookResponses = await processServerSideShortcuts(rawResponses);
 
       // Store summary in session history
       const summaryText = pockethookResponses.map((r) => r.msg).join("\n");

@@ -11,6 +11,8 @@ export interface Config {
   port: number;
   authToken: string;
   agentName: string;
+  userName?: string;
+  onboardingChat: boolean;
   llmApiKey: string;
   llmProvider: Provider;
   llmModel: string;
@@ -35,9 +37,30 @@ export interface Config {
 
 // ── Base system prompt (fixed, loaded once) ─────────────────────────────
 
-function buildBaseSystemPrompt(agentName: string, vectorMemoryEnabled: boolean): string {
+function buildBaseSystemPrompt(agentName: string, vectorMemoryEnabled: boolean, userName?: string, onboardingChat: boolean = false): string {
   const shortcutsDir = join(PROJECT_ROOT, "skills");
-  return `Your name is ${agentName}. You are a helpful AI assistant integrated with PocketHook, an iOS automation app.
+  const userNameLine = userName
+    ? `\n\nThe user's name is ${userName}. Use it occasionally and naturally in conversation — for greetings or when it feels right. Do not use it in every response.`
+    : "";
+  const onboardingBlock = userName && onboardingChat ? `
+
+## Getting to know the user
+
+On your FIRST conversation with ${userName}, offer to ask a few personal questions so you can provide more personalized help. Keep it brief and natural — something like "Hey ${userName}, I'd love to get to know you a bit so I can help you better. Mind if I ask you a few quick questions?"
+
+If they agree, ask about these topics — one or two at a time, conversationally, not as a checklist:
+- What they do for work or study
+- Where they live
+- Family — partner, kids, pets
+- Main interests or hobbies
+- Anything else they'd like you to keep in mind
+
+Store every piece of information using \`remember_fact\` as you go (e.g., \`("user", "works_as", "designer")\`, \`("user", "lives_in", "Madrid")\`, \`("user", "hobby", "running")\`). When done, confirm briefly that you've noted everything and transition naturally to regular chat.
+
+If the user declines, respect it immediately with something short like "No problem!" and move on. Store \`remember_fact({subject: "user", predicate: "declined_intro_questions", object: "true"})\` so you never ask again.
+
+IMPORTANT: Only offer this ONCE. Before offering, check \`query_facts("user")\` — if you already have personal facts about the user (work, location, family, hobbies) OR if they previously declined, do NOT offer again.` : "";
+  return `Your name is ${agentName}. You are a helpful AI assistant integrated with PocketHook, an iOS automation app.${userNameLine}
 
 You have access to tools for interacting with the server (shell, read, write, ls) and a special "respond" tool to send your final answer.
 
@@ -50,6 +73,7 @@ Each step has:
 - shortcut (optional): iOS Shortcut name to trigger on the user's device
 - data (optional): JSON data to pass to the shortcut — ALWAYS include this when triggering a shortcut. The shortcut receives this data as input.
 - url (optional): HTTPS URL to attach
+- run_on (optional): Where to execute the shortcut: "server" (on the Mac server) or "device" (on the iOS device, default). Use "server" ONLY for shortcuts from skills with [target: mac] in the skills index.
 
 ## Content rendering
 
@@ -225,12 +249,13 @@ When the user asks to add, create, register, edit, remove, or delete a skill or 
 
 Steps:
 1. Identify what is provided and what is missing.
-   - For shortcut skills: shortcut name (exact, as on device), description, and all data fields with types.
+   - For shortcut skills: shortcut name (exact, as on device), description, all data fields with types, and where it should run (mac or device).
    - For behavior skills: the trigger condition and the rules to apply.
-2. If ANYTHING is missing or ambiguous, ask the user before proceeding. Do NOT invent names, fields, or rules.
-3. Show the user a short summary of what you understood and ask for confirmation before creating the file.
-4. Only after confirmation, create a .md file in ${shortcutsDir} with the proper format below.
-5. Confirm the result to the user via respond tool.
+2. Ask the user where the shortcut should run: on the Mac server (\`target: mac\`) or on the iOS device (\`target: device\`, default). Suggest \`mac\` when the shortcut creates content synced via iCloud (notes, reminders, calendar) or doesn't need direct interaction on the iOS device.
+3. If ANYTHING is missing or ambiguous, ask the user before proceeding. Do NOT invent names, fields, or rules.
+4. Show the user a short summary of what you understood and ask for confirmation before creating the file.
+5. Only after confirmation, create a .md file in ${shortcutsDir} with the proper format below.
+6. Confirm the result to the user via respond tool.
 
 ### Required file format
 
@@ -241,6 +266,7 @@ EVERY skill file MUST start with YAML frontmatter:
 title: Human-readable title
 description: One short sentence describing the purpose (used in the skills index)
 shortcuts: [shortcutName1, shortcutName2]
+target: device
 ---
 
 ### Display Name
@@ -252,6 +278,7 @@ Frontmatter rules:
 - \`title\`: short human-readable name
 - \`description\`: ONE sentence — this is what you (the agent) will see in the index, so make it specific enough to know when to load the skill
 - \`shortcuts\`: array of EVERY shortcut name defined in the file. Use \`[]\` for behavior-only skills with no shortcuts.
+- \`target\` (optional): \`mac\` to execute shortcuts on the Mac server, \`device\` to send to the iOS device (default). Use \`mac\` for shortcuts that create iCloud-synced content (notes, reminders, calendar) or don't need iOS device interaction. When a skill has \`target: mac\`, set \`run_on: "server"\` in the respond tool call.
 
 ### Shortcut body format
 
@@ -403,11 +430,12 @@ Parameters:
 - Custom tools are hot-reloaded — available on the next request after creation
 - If the user asks "what tools do you have?", list both built-in and custom tools
 
-Keep responses concise. You can use Markdown in msg (bold, code blocks, lists, etc.).`;
+Keep responses concise. You can use Markdown in msg (bold, code blocks, lists, etc.).${onboardingBlock}`;
 }
 
 let BASE_SYSTEM_PROMPT: string | null = null;
 let cachedVectorMemoryFlag: boolean = false;
+let cachedUserName: string | undefined;
 
 // ── Personality (hot-reloaded from personality.md) ──────────────────────
 
@@ -484,7 +512,8 @@ function getInstructions(): string {
 export const SKILLS_DIR = join(PROJECT_ROOT, "skills");
 let cachedSkillsIndex: string = "";
 let cachedSkillsMtime: number = 0;
-let cachedSkillsMap: Map<string, { file: string; title: string; description: string }> = new Map();
+let cachedSkillsMap: Map<string, { file: string; title: string; description: string; target?: "mac" | "device"; syncApp?: string }> = new Map();
+let cachedShortcutToSkill: Map<string, string> = new Map();
 
 export interface SkillMeta {
   name: string;
@@ -520,7 +549,7 @@ function getSkillsMaxMtime(): number {
  *    ---
  * 2. Auto-extracted: ### Title (line 1) + first paragraph as description
  */
-function parseSkillMeta(filename: string, content: string): SkillMeta & { shortcuts?: string[] } {
+function parseSkillMeta(filename: string, content: string): SkillMeta & { shortcuts?: string[]; target?: "mac" | "device"; syncApp?: string } {
   const name = filename.replace(/\.(md|txt)$/, "");
 
   // Try frontmatter
@@ -530,16 +559,24 @@ function parseSkillMeta(filename: string, content: string): SkillMeta & { shortc
     const titleMatch = fm.match(/^title:\s*(.+)$/m);
     const descMatch = fm.match(/^description:\s*(.+)$/m);
     const shortcutsMatch = fm.match(/^shortcuts:\s*\[([^\]]+)\]/m);
+    const targetMatch = fm.match(/^target:\s*(.+)$/m);
+    const syncAppMatch = fm.match(/^sync_app:\s*(.+)$/m);
     if (descMatch) {
       const shortcuts = shortcutsMatch
         ? shortcutsMatch[1]!.split(",").map((s) => s.trim()).filter(Boolean)
         : undefined;
+      const rawTarget = targetMatch?.[1]?.trim().toLowerCase();
+      const target: "mac" | "device" | undefined = rawTarget === "mac" ? "mac" : rawTarget === "device" ? "device" : undefined;
+      const rawSyncApp = syncAppMatch?.[1]?.trim();
+      const syncApp = rawSyncApp && rawSyncApp.toLowerCase() !== "none" ? rawSyncApp : undefined;
       return {
         name,
         file: filename,
         title: titleMatch?.[1]?.trim() ?? name,
         description: descMatch[1]!.trim(),
         shortcuts,
+        target,
+        syncApp,
       };
     }
   }
@@ -584,6 +621,7 @@ function parseSkillMeta(filename: string, content: string): SkillMeta & { shortc
  */
 function loadSkillsIndex(): string {
   cachedSkillsMap.clear();
+  cachedShortcutToSkill.clear();
   if (!existsSync(SKILLS_DIR)) return "";
   try {
     const files = readdirSync(SKILLS_DIR)
@@ -595,11 +633,17 @@ function loadSkillsIndex(): string {
     for (const file of files) {
       const content = readFileSync(join(SKILLS_DIR, file), "utf-8");
       const meta = parseSkillMeta(file, content);
-      cachedSkillsMap.set(meta.name, { file, title: meta.title, description: meta.description });
+      cachedSkillsMap.set(meta.name, { file, title: meta.title, description: meta.description, target: meta.target, syncApp: meta.syncApp });
+      if (meta.shortcuts) {
+        for (const sc of meta.shortcuts) {
+          cachedShortcutToSkill.set(sc, meta.name);
+        }
+      }
       const shortcutsLine = meta.shortcuts && meta.shortcuts.length > 0
         ? ` [shortcuts: ${meta.shortcuts.join(", ")}]`
         : "";
-      entries.push(`- **${meta.name}** — ${meta.title}: ${meta.description}${shortcutsLine}`);
+      const targetLine = meta.target === "mac" ? " [target: mac]" : "";
+      entries.push(`- **${meta.name}** — ${meta.title}: ${meta.description}${shortcutsLine}${targetLine}`);
     }
 
     return "\n\n## Available Skills\n\nThe following skills are available. Use the `load_skill` tool to load the full content of any skill when you need to use it.\n\n" + entries.join("\n");
@@ -627,6 +671,27 @@ export function getSkillContent(name: string): string | null {
  */
 export function listSkillNames(): string[] {
   return [...cachedSkillsMap.keys()];
+}
+
+/**
+ * Get the target platform for a skill's shortcuts.
+ * Returns "mac" if the skill has target: mac, otherwise "device".
+ */
+export function getSkillTarget(skillName: string): "mac" | "device" {
+  const meta = cachedSkillsMap.get(skillName);
+  return meta?.target ?? "device";
+}
+
+/**
+ * Get the sync app for a shortcut (used to nudge iCloud sync after server-side execution).
+ * Looks up which skill contains the shortcut, then returns its sync_app.
+ * Returns undefined if no sync_app is set or it's "none".
+ */
+export function getSyncAppForShortcut(shortcutName: string): string | undefined {
+  const skillName = cachedShortcutToSkill.get(shortcutName);
+  if (!skillName) return undefined;
+  const meta = cachedSkillsMap.get(skillName);
+  return meta?.syncApp;
 }
 
 /**
@@ -664,10 +729,11 @@ function formatCurrentDate(): string {
   return `\n\nCurrent date/time: ${date} ${time} (${day})${tz ? ` ${tz}` : ""}`;
 }
 
-export function getSystemPrompt(agentName: string, vectorMemoryEnabled: boolean = false): string {
-  if (!BASE_SYSTEM_PROMPT || cachedVectorMemoryFlag !== vectorMemoryEnabled) {
-    BASE_SYSTEM_PROMPT = buildBaseSystemPrompt(agentName, vectorMemoryEnabled);
+export function getSystemPrompt(agentName: string, vectorMemoryEnabled: boolean = false, userName?: string, onboardingChat: boolean = false): string {
+  if (!BASE_SYSTEM_PROMPT || cachedVectorMemoryFlag !== vectorMemoryEnabled || cachedUserName !== userName) {
+    BASE_SYSTEM_PROMPT = buildBaseSystemPrompt(agentName, vectorMemoryEnabled, userName, onboardingChat);
     cachedVectorMemoryFlag = vectorMemoryEnabled;
+    cachedUserName = userName;
   }
 
   const currentMtime = getSkillsMaxMtime();
@@ -699,6 +765,8 @@ export function loadConfig(): Config {
     port: Number(process.env.PORT) || 3000,
     authToken: requireEnv("AUTH_TOKEN"),
     agentName: process.env.AGENT_NAME || "PocketHook Assistant",
+    userName: process.env.USER_NAME || undefined,
+    onboardingChat: process.env.ONBOARDING_CHAT === "true",
     llmApiKey: process.env.LLM_PROVIDER === "ollama"
       ? (process.env.LLM_API_KEY || "ollama")
       : process.env.LLM_PROVIDER === "lm-studio"

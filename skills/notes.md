@@ -2,6 +2,8 @@
 title: Notes
 description: Create notes on the user's device with a title and body
 shortcuts: [newNote]
+target: mac
+sync_app: Notes
 ---
 
 ### New Note

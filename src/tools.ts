@@ -229,6 +229,9 @@ const respondStepSchema = Type.Object({
     Type.Array(Type.Record(Type.String(), Type.Unknown())),
   ], { description: "JSON data to pass to the shortcut (object or array of objects)" })),
   url: Type.Optional(Type.String({ description: "HTTPS URL to attach to the response" })),
+  run_on: Type.Optional(Type.Union([Type.Literal("server"), Type.Literal("device")], {
+    description: "Where to execute the shortcut: 'server' (on the Mac server) or 'device' (on the iOS device, default). Use 'server' only for shortcuts from skills with target: mac.",
+  })),
 });
 
 const respondSchema = Type.Object({
@@ -243,6 +246,7 @@ export interface PocketHookResponse {
   shortcut?: string;
   data?: Record<string, unknown> | Record<string, unknown>[];
   url?: string;
+  run_on?: "server" | "device";
 }
 
 export function createRespondTool(
@@ -259,6 +263,7 @@ export function createRespondTool(
         shortcut: step.shortcut,
         data: step.data as Record<string, unknown> | Record<string, unknown>[] | undefined,
         url: step.url,
+        run_on: step.run_on,
       }));
       onRespond(responses);
       return {

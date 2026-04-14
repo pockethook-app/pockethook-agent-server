@@ -2,6 +2,7 @@
 title: Skill Template
 description: Reference for authoring skill files. Not loaded as a real skill.
 shortcuts: []
+target: device
 ---
 
 ### Template — How to add a skill
@@ -18,12 +19,17 @@ summary in the skills index without loading the whole file:
 title: Human-readable title
 description: One short sentence describing the purpose
 shortcuts: [shortcutName1, shortcutName2]
+target: device
 ---
 ```
 
 The `shortcuts` array lists ALL shortcut names defined in the file.
 The agent uses this to know which file to load_skill when the user
 needs a specific shortcut.
+
+The `target` field controls where shortcuts execute:
+- `device` (default): sent to the iOS device via PocketHook
+- `mac`: executed on the Mac server via shortcuts:// URL scheme (iCloud syncs the result)
 
 ## Body format
 

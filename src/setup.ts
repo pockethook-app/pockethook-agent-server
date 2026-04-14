@@ -260,6 +260,26 @@ async function setup() {
   if (p.isCancel(agentName)) cancelled();
   env.AGENT_NAME = agentName;
 
+  const userName = await p.text({
+    message: "Your name or nickname (how the agent should call you)",
+    placeholder: "Leave empty to skip",
+    initialValue: env.USER_NAME || "",
+  });
+  if (p.isCancel(userName)) cancelled();
+  if (userName) {
+    env.USER_NAME = userName;
+
+    const onboardingChat = await p.confirm({
+      message: "Would you like the agent to ask you some questions on your first chat to get to know you better?",
+      initialValue: env.ONBOARDING_CHAT !== "false",
+    });
+    if (p.isCancel(onboardingChat)) cancelled();
+    env.ONBOARDING_CHAT = onboardingChat ? "true" : "false";
+  } else {
+    delete env.USER_NAME;
+    delete env.ONBOARDING_CHAT;
+  }
+
   const authToken = await p.text({
     message: "PocketHook auth token",
     placeholder: "Shared secret between PocketHook app and this server",
