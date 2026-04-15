@@ -193,6 +193,9 @@ export async function chat(
         .map((c) => (c as { type: "text"; text: string }).text)
         .join("");
 
+  // Boundary so the fallback below cannot pick up text from prior turns.
+  const turnStartIdx = agent.state.messages.length;
+
   await agent.prompt(userText);
 
   // If the LLM called respond tool, use that
@@ -200,10 +203,11 @@ export async function chat(
     return pockethookResponses;
   }
 
-  // Fallback: extract text from the last REAL assistant message
-  // (skip the synthetic ack message injected for memory context)
+  // Fallback: extract text from an assistant message produced in THIS turn only.
+  // Walking past turnStartIdx would surface stale text from a previous turn,
+  // which the user perceives as the agent "repeating" itself.
   const allMessages = agent.state.messages;
-  for (let i = allMessages.length - 1; i >= 0; i--) {
+  for (let i = allMessages.length - 1; i >= turnStartIdx; i--) {
     const msg = allMessages[i];
     if (!msg || msg.role !== "assistant") continue;
     const text = (msg as AssistantMessage).content
@@ -217,6 +221,9 @@ export async function chat(
     }
   }
 
-  logger.warn("LLM produced no usable response (tool call not made, no fallback text)");
+  const turnAssistantCount = allMessages.slice(turnStartIdx).filter((m) => m?.role === "assistant").length;
+  logger.warn(
+    `LLM produced no usable response (tool call not made, no fallback text in current turn; assistant msgs this turn: ${turnAssistantCount})`,
+  );
   return [{ msg: "I processed your request but have no text response. The model may not support tool calling properly." }];
 }
