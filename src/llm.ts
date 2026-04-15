@@ -4,7 +4,7 @@ import type { AssistantMessage, Model, Api, Message } from "@mariozechner/pi-ai"
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Config } from "./config.js";
 import { updateEnvFile } from "./config.js";
-import { createRespondTool, type PocketHookResponse } from "./tools.js";
+import { createRespondTool, createRunCodeJobTool, type PocketHookResponse } from "./tools.js";
 import { FAKE_ACK_TEXT } from "./sessions.js";
 import { logger } from "./logger.js";
 
@@ -158,13 +158,17 @@ export async function chat(
 
   const apiKey = await ensureFreshApiKey(config);
 
-  // Capture the respond tool's output
+  // Capture the respond tool's output. run_code_job emits an ack through the
+  // same callback so the "create job + respond" orchestration happens in a
+  // single tool call.
   let pockethookResponses: PocketHookResponse[] | null = null;
-  const respondTool = createRespondTool((responses) => {
+  const onRespond = (responses: PocketHookResponse[]) => {
     pockethookResponses = responses;
-  });
+  };
+  const respondTool = createRespondTool(onRespond);
+  const runCodeJobTool = createRunCodeJobTool(config.workingDir, onRespond);
 
-  const allTools = [...tools, respondTool];
+  const allTools = [...tools, respondTool, runCodeJobTool];
 
   const agent = new Agent({
     initialState: {

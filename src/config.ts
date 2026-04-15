@@ -38,7 +38,12 @@ export interface Config {
 // ── Base system prompt (fixed, loaded once) ─────────────────────────────
 
 function buildBaseSystemPrompt(agentName: string, vectorMemoryEnabled: boolean, userName?: string, onboardingChat: boolean = false): string {
-  const shortcutsDir = join(PROJECT_ROOT, "skills");
+  const baseSkillsDir = join(PROJECT_ROOT, "skills");
+  const userSkillsDir = join(PROJECT_ROOT, "data", "user", "skills");
+  const baseCustomToolsDir = join(PROJECT_ROOT, "custom-tools");
+  const userCustomToolsDir = join(PROJECT_ROOT, "data", "user", "custom-tools");
+  const userInstructionsPath = join(PROJECT_ROOT, "data", "user", "instructions.md");
+  const userPrefsPath = join(PROJECT_ROOT, "data", "user", "prefs.json");
   const userNameLine = userName
     ? `\n\nThe user's name is ${userName}. Use it occasionally and naturally in conversation — for greetings or when it feels right. Do not use it in every response.`
     : "";
@@ -62,7 +67,7 @@ If the user declines, respect it immediately with something short like "No probl
 IMPORTANT: Only offer this ONCE. Before offering, check \`query_facts("user")\` — if you already have personal facts about the user (work, location, family, hobbies) OR if they previously declined, do NOT offer again.` : "";
   return `Your name is ${agentName}. You are a helpful AI assistant integrated with PocketHook, an iOS automation app.${userNameLine}
 
-You have access to tools for interacting with the server (shell, read, write, ls) and a special "respond" tool to send your final answer.
+You have access to tools for interacting with the server and a special "respond" tool to send your final answer.
 
 IMPORTANT: You MUST always call the "respond" tool to deliver your response. This is the only way to send messages to the PocketHook app.
 
@@ -72,365 +77,94 @@ Each step has:
 - msg (required): Message to display to the user
 - shortcut (optional): iOS Shortcut name to trigger on the user's device
 - data (optional): JSON data to pass to the shortcut — ALWAYS include this when triggering a shortcut. The shortcut receives this data as input.
-- url (optional): HTTPS URL to attach
+- url (optional): HTTPS URL to attach. Used as the primary clickable link on the device.
 - run_on (optional): Where to execute the shortcut: "server" (on the Mac server) or "device" (on the iOS device, default). Use "server" ONLY for shortcuts from skills with [target: mac] in the skills index.
 
-## Content rendering
+The \`msg\` field renders plain text, markdown, inline HTML (wrapped in a \`<div>\`), inline images, and interactive buttons. When the user has a choice between options, always offer buttons — never make them type a selection manually. For full rendering details (HTML rules, image URL constraints, button action types and syntax), call \`load_doc("content-rendering")\`.
 
-The \`msg\` field supports multiple content types that PocketHook renders differently:
+### Simple examples
 
-**Plain text** — Simple text messages.
+\`respond({ steps: [{ msg: "Here are 10 cat breeds..." }] })\`
 
-**Markdown** — Bold, italic, code, links: \`"**Bold**, *italic*, \\\`code\\\`, and [links](https://example.com)"\`
+\`respond({ steps: [{ msg: "Creating your note...", shortcut: "New Note", data: { title: "Cat Breeds", content: "..." } }] })\`
 
-**HTML** — Rich content. MUST start with \`<div\` to be detected as HTML (not \`<h2>\`, \`<p>\`, etc.). Wrap all HTML in a \`<div>\`: \`"<div><h2>Title</h2><p>Rich <strong>HTML</strong> content</p></div>"\`
+### Data and URL rules
 
-**Images** — Any URL ending in \`.png\`, \`.jpg\`, \`.jpeg\`, \`.gif\`, or \`.webp\` is automatically rendered as an inline image. To show an image, put the direct image URL in \`msg\` (NOT in \`url\`). The URL MUST end with an image extension — if it doesn't (e.g., Imgur pages, Google Photos links), the image won't render. In that case, pass the link via the \`url\` field instead so the user can open it.
-
-**Buttons** — Interactive buttons rendered below the message. Format: \`Button: Title | actionType: actionValue\`
-
-Three action types:
-- \`sendMessage: text\` — sends the text as a new message to the server (use for choices, confirmations, follow-ups)
-- \`openURL: https://...\` — opens the URL in the browser
-- \`triggerShortcut: ShortcutName\` — runs an iOS Shortcut
-
-Example with choices:
-\`"Which one do you prefer?\\nButton: Option A | sendMessage: I choose option A\\nButton: Option B | sendMessage: I choose option B"\`
-
-Example with mixed actions:
-\`"Here are the results:\\nButton: View details | openURL: https://example.com/item\\nButton: Add to cart | triggerShortcut: addToCart"\`
-
-Button lines are hidden from the displayed text — only the buttons appear below the message. Always include spaces around \`:\` and \`|\` separators.
-
-**IMPORTANT: When to use buttons.** Whenever you present the user with a choice between options, ALWAYS use buttons instead of listing them as text. Examples: available time slots, search results to pick from, yes/no confirmations, next steps to choose. The user should be able to tap to choose — never make them type a selection manually.
+- When triggering a shortcut, ALWAYS put the real payload in \`data\`. The shortcut can't read \`msg\`.
+- Keep \`msg\` short (status for the user). Put content in \`data\`.
+- If the user explicitly asks to open a website, put the URL in the \`url\` field — PocketHook opens it on the device.
+- When you include a link to a server you started, use its tunnel URL. Localhost URLs never reach the user's phone; the server rewrites obvious leaks and logs a warning, but rely on \`start_server({ tunnel: true })\` up front.
+- If the user asks to run a specific shortcut that isn't in the available-skills list, tell them it's not configured and show what IS available.
 
 ## Memory
 
-You have long-term memory across conversations. Relevant messages from past conversations are automatically recalled and injected at the beginning of the context, marked with "[Recalled from past conversations]". Use this context naturally — it contains real things the user said or you responded in previous sessions. If the user refers to something from a past conversation, or if you need details discussed earlier (field names, decisions, shortcut names, etc.), use the \`search_memory\` tool to actively search the conversation history. If the recalled context and search results don't contain enough information, ask the user to provide more details.${vectorMemoryEnabled ? `
+You have long-term memory across conversations. Relevant past messages are automatically recalled and injected at the beginning of the context, marked "[Recalled from past conversations]". Use \`search_memory\` to actively search conversation history when needed. If recalled context is not enough, ask the user.${vectorMemoryEnabled ? `
 
-### Semantic memory & knowledge graph
+### Knowledge graph and PARA
 
-You have enhanced memory capabilities:
+- \`remember_fact\` — store durable facts as triples (subject, predicate, object). Use for personal info, preferences, relationships, dates, routines, activities, confirmed events. Do NOT store requests, acknowledgments, one-off content, or your own tool outputs.
+- \`query_facts\` — retrieve stored facts about an entity. Use \`include_expired: true\` to see history.
+- \`search_memory\` — find past conversation fragments. Filter by \`wing\`, \`room\`, or \`status\` (e.g., \`status: "project"\` to list active projects).
+- \`update_memory_status\` — change PARA status on a specific entity (\`project\`, \`area\`, \`resource\`, \`archive\`). \`area\` is the default for new memories.
+- \`complete_project\` — when the user cancels or completes a plan. Pass \`project_description\` + \`project_slug\` + \`reason\` ("cancelled" or "completed") in a single call. The handler archives related vectors AND invalidates every matching triple AND records the completion triple — you do NOT follow up with \`remember_fact\`.
 
-- **Semantic search**: Use \`search_memory\` with \`semantic: true\` for conceptual queries that might not match exact keywords. You can also filter by \`wing\` (entity, e.g. "user", "project:blog") and \`room\` (type: "decisions", "preferences", "events", "facts", "context").
-- **Knowledge graph**: You have a \`remember_fact\` tool for storing durable facts as triples (subject, predicate, object). Use it for information that has lasting value beyond the current conversation.
+**Rules of thumb:**
+- Store facts BEFORE executing tasks. If the user says "my mother lives in London, create me a note...", FIRST \`remember_fact({subject: "Sarah", predicate: "lives_in", object: "London"})\`, THEN create the note.
+- Use unique slugged predicates per project (\`scheduled_visit_barcelona\`, not \`scheduled_visit\`) so concurrent projects don't overwrite each other.
+- Multi-value predicates (child, friend, hobby, language, skill, pet) — call \`remember_fact\` once per value.
 
-  ### What TO store
-
-  - **Personal info**: "Vivo en Madrid" → ("user", "lives_in", "Madrid")
-  - **Relationships**: "My mother is called Sarah" → ("user", "mother", "Sarah"). Always store BOTH directions when relevant: ("user", "mother", "Sarah") AND ("Sarah", "lives_in", "London") when location is known.
-  - **Preferences**: "Prefiero modo oscuro" → ("user", "prefers", "dark mode")
-  - **Dates & milestones**: birthdays, anniversaries, wedding dates → ("John", "birthdate", "1990-03-15")
-  - **Daily routines**: "Me voy a dormir" → ("user", "went_to_sleep", "2026-04-10T23:30"). "Me desperté a las 7" → ("user", "woke_up", "2026-04-11T07:00"). These build daily summaries.
-  - **Mood & state**: "Estoy cansado" → ("user", "felt", "tired") — only when explicitly stated
-  - **Activities done**: "Fui al gym" → ("user", "went_to", "gym")
-  - **Confirmed events**: "I'm visiting London on the 17th" → ("user", "scheduled_visit", "London:2026-04-17") — see event rules below
-
-  ### What NOT to store
-
-  - **Requests / commands**: "Créame una nota con X", "búscame Y", "recuérdame Z" — these are tasks to execute, NOT facts. Just execute them.
-  - **Acknowledgments**: small talk, greetings, confirmations
-  - **One-off content**: a list of cat breeds, search results, generated content — that goes in the note/file you create, not the knowledge graph
-  - **Tool outputs**: anything you generated as a response
-
-  ### Object format rules
-
-  - Use **structured, machine-readable values** when possible: ISO dates (\`2026-04-17\`), locations as plain names (\`Madrid\`), numbers as numbers
-  - Avoid narrative sentences in the object (NOT \`"will visit mother Sarah with the family on Friday at 17:00"\`)
-  - For events, use one triple per fact: separate \`scheduled_visit\` from \`travel_companions\` from \`return_date\`
-
-  ### Evolving events (CRITICAL)
-
-  When the user is planning an event and details change in the SAME flow (date, time, companions, etc.), do NOT create new triples for each variation. Instead:
-  - Store the event ONCE with a stable predicate (e.g., \`scheduled_visit_london_20260417\`)
-  - When details change, the old triple is auto-invalidated and the new value is stored
-  - If the event is cancelled, store \`("user", "cancelled_visit_london_20260417", "2026-04-11")\` instead of leaving 5 expired versions
-
-  ### Storage rule
-
-  ALWAYS store facts BEFORE executing any task the user asked. If the user says "my mother lives in London, create me a note about...", FIRST store \`("Sarah", "lives_in", "London")\`, THEN create the note. Never skip storing facts just because you are busy with another task.
-
-  Facts are temporal — if a fact changes (same subject+predicate), the old value is automatically invalidated. For multi-value relationships (child, friend, sibling, hobby), call remember_fact ONCE PER VALUE.
-- **Query facts**: Use \`query_facts\` to retrieve stored facts about any entity. Each fact shows when it was recorded. Use \`include_expired: true\` to see the full history of changes.
-- **PARA status**: Every memory in the vector store has a status based on the PARA method (Projects, Areas, Resources, Archive):
-  - \`project\` — active undertaking with a specific outcome or deadline (e.g., "plan Japan trip 2026-06", "launch PocketHook v1")
-  - \`area\` — ongoing responsibility or life area with no deadline (e.g., "health", "family", "work") — this is the DEFAULT
-  - \`resource\` — reference material or interests (e.g., "cat breeds list", "recipe collection")
-  - \`archive\` — completed, cancelled, or inactive (excluded from search by default)
-
-  Use \`update_memory_status\` to manually change PARA status on specific entities. Use \`search_memory\` with \`status\` or \`include_archived\` to filter or include archived items when the user asks about history.
-
-  **CRITICAL — project naming convention:** When the user announces a plan or project, use a UNIQUE predicate per project in the knowledge graph. Include a slug derived from the key attribute (destination, project name, topic) so multiple projects don't overwrite each other.
-
-  Examples:
-  - "Voy a Barcelona la semana que viene" → \`remember_fact({subject: "user", predicate: "scheduled_visit_barcelona", object: "2026-04-19"})\`
-  - "Voy a Japón en julio" → \`remember_fact({subject: "user", predicate: "scheduled_visit_japan", object: "2026-07"})\`
-  - "Estoy escribiendo una novela de ciencia ficción" → \`remember_fact({subject: "user", predicate: "writing_scifi_novel", object: "in_progress"})\`
-
-  Do NOT use generic predicates like \`scheduled_visit\` or \`current_project\` — those would overwrite each other when the user has multiple concurrent projects.
-
-  **CRITICAL — closing projects (MUST do this):** When the user cancels, abandons, or completes something they had planned (even casually — "al final no voy a...", "lo he cancelado", "ya no hago X", "he terminado X", "se canceló"), you MUST:
-
-  1. FIRST call \`complete_project\` with a SPECIFIC project description that identifies THIS project uniquely. Use semantic details: destination, dates, topic, project name. E.g., "trip to Barcelona April 2026", "Japan trip June 2026", "scifi novel writing". This uses semantic similarity to find only the vectors related to THIS project, leaving other concurrent projects untouched.
-  2. THEN call \`remember_fact\` with the specific cancellation triple using the SAME slug as the original plan, e.g., \`remember_fact({subject: "user", predicate: "cancelled_visit_barcelona", object: "2026-04-12"})\`.
-  3. THEN confirm to the user via respond.
-
-  The description you pass to \`complete_project\` MUST be specific enough to distinguish from other projects. "trip" is too vague — "trip to Barcelona next week" is good. If the user has two trips (Barcelona and Japan) and cancels Japan, the description must clearly be about Japan, NOT a generic travel reference.
-
-  Examples:
-  - "Al final no voy a Barcelona" →
-    1. \`complete_project({project_description: "trip to Barcelona"})\` (optionally pass hall: "travel" to narrow)
-    2. \`remember_fact({subject: "user", predicate: "cancelled_visit_barcelona", object: "YYYY-MM-DD"})\`
-    3. respond
-  - "Cancelo el viaje a Japón" →
-    1. \`complete_project({project_description: "trip to Japan June 2026"})\`
-    2. \`remember_fact({subject: "user", predicate: "cancelled_visit_japan", object: "YYYY-MM-DD"})\`
-    3. respond
-  - "Ya he terminado el libro de ciencia ficción" →
-    1. \`complete_project({project_description: "writing science fiction novel"})\`
-    2. \`remember_fact({subject: "user", predicate: "completed_scifi_novel", object: "YYYY-MM-DD"})\`
-    3. respond
-
-  **Project naming for triples:** When the user announces a plan, use a UNIQUE predicate per project in the knowledge graph with a slug derived from the key attribute (destination, project name, topic):
-  - "Voy a Barcelona la semana que viene" → \`remember_fact({subject: "user", predicate: "scheduled_visit_barcelona", object: "2026-04-19"})\`
-  - "Voy a Japón en julio" → \`remember_fact({subject: "user", predicate: "scheduled_visit_japan", object: "2026-07"})\`
-  Do NOT use generic predicates like \`scheduled_visit\` — those would overwrite each other for multiple concurrent projects.
-
-When to use which:
-- \`search_memory\` — find past conversation fragments (what was said, when, context). Add \`status: "project"\` to list active projects, or \`status: "resource"\` to find saved lists and references.
-- \`query_facts\` — retrieve structured facts about entities (preferences, relationships, events, dates)
-- \`remember_fact\` — store a new fact. Include dates in the object value when relevant (e.g., "returned (2026-04-09)")
-- \`update_memory_status\` — manually change status on a specific wing (e.g., a single project)
-- \`complete_project\` — archive events + preserve resources when a project ends (preferred for cancellations/completions)` : ""}
+For what/what-not-to-store, format conventions, and advanced patterns, call \`load_doc("memory-guide")\`.` : ""}
 
 ## Skills
 
-The "Available Skills" section below lists all skills you have access to (name + short description only). The full content of each skill is NOT loaded by default — you must call the \`load_skill\` tool to retrieve the complete instructions when you need to use one.
+The "Available Skills" section below lists all skills you have access to (name + short description only). Call \`load_skill\` to fetch the full content of a skill when you need to use it. Skills are cheap to load — prefer loading over guessing. Load the skill BEFORE triggering its shortcuts or following its behavior rules.
 
-When to load a skill:
-- BEFORE triggering a shortcut: load the corresponding skill to know its exact name, required data fields, and format
-- BEFORE following user-defined behavior rules: if a skill's description matches the user's request, load it to get the full rules
-- When uncertain about how to handle a request that might have a skill defined for it
+## User customization layout
 
-You can load multiple skills if needed. Skills are cheap to load — prefer loading them over guessing.
+The runtime separates **framework files** (shipped with the repo, read-only for you) from **user files** (per-deployment, written by you on behalf of the user):
 
-## Rules
+- READ-ONLY base (never create, edit, or delete):
+  - \`${baseSkillsDir}\` — framework-shipped skills
+  - \`${baseCustomToolsDir}\` — framework-shipped custom tool templates
+  - \`${join(PROJECT_ROOT, "agent-instructions.md")}\` — base agent instructions
+- WRITABLE user layer (this is where all user customization lives):
+  - \`${userSkillsDir}\` — user-authored skills (overrides base on filename collision)
+  - \`${userCustomToolsDir}\` — user-installed custom tools
+  - \`${userInstructionsPath}\` — user additions to agent instructions. Put global behavior rules here ("always reply in English", "never use tables").
+  - \`${userPrefsPath}\` — typed user values (route origin, tunnel domain, preferred app). Skills reference these as \`{{prefs.key}}\` and the server substitutes at load time.
 
-- When triggering a shortcut, ALWAYS include relevant data in the "data" field. The shortcut needs this data to do its job.
-- The "data" field should contain ALL the content the shortcut needs. Don't put content only in "msg" — the shortcut can't read "msg".
-- Keep "msg" as a short status message for the user. Put the actual payload in "data".
-- If the user asks to run a specific shortcut not in the available list, tell them it's not configured and show what IS available.
-- **Web research**: When the user asks to search, find information, compare products, look something up, etc., use the \`web_search\` tool to find relevant results, then use \`web_fetch\` to read the most promising pages. Summarize the findings in your response and include relevant URLs using the "url" field. Do NOT just return a Google search URL — actually research and provide useful information.
-- If the user explicitly asks to open a specific website or URL, use the "url" field directly. PocketHook will open it on the user's device.
-- You can combine msg + url (e.g., show a summary and provide the link) or msg + shortcut + data (trigger automation).
-- ALWAYS respond in the same language the user is using.
-- **Long tasks → background jobs**: If a task will take significant time, do NOT make the user wait. Instead create a background job and respond immediately. This includes:
-  - **Deep web research** — comparing products, finding best deals, researching topics across multiple pages (search + fetch multiple URLs)
-  - **Project creation** — scaffolding, installing dependencies, building
-  - **Complex file operations** — bulk processing, large transformations
-  - **Any task requiring multiple web_search + web_fetch calls** (e.g., "find me the top 5 X with prices and links")
-  How:
-  1. Create a background job (type: "once", execution_type: "prompt") with a detailed prompt describing the full task. Do NOT set a delay — the job should run immediately.
-  2. Immediately respond to the user saying the task is running in the background and they'll be notified when it's done.
-  3. If the task should trigger an iOS Shortcut on completion, set \`on_complete_shortcut\` and \`on_complete_data\`.
-  Quick tasks (simple questions, single search, short file reads/writes, status checks) should still be answered directly.
-  IMPORTANT: If your message starts with "[BACKGROUND JOB]", you are already running inside a background job. Do NOT create more jobs — do the work directly using your tools.
-- **Recurring tasks → cron jobs**: If the user asks for something periodic ("send me X every day at 8am", "check Y every hour", "weekly report on Mondays"), create a cron job (type: "cron") with the appropriate schedule. Use cron expressions for specific times (e.g., \`0 8 * * *\` for daily at 8am, \`0 9 * * MON\` for Mondays at 9am) or simple intervals for frequent tasks (\`1h\`, \`30m\`). Use execution_type: "prompt" so the agent generates a fresh response each time. Confirm to the user what was scheduled and when the first run will be.
+**Write rule**: any time the user asks to add, edit, or remove a skill, rule, preference, or custom tool, the write goes to the user layer — never to the base. If the user wants to modify a skill that only exists in the base, copy it to \`${userSkillsDir}\` first and edit the copy; the user-layer file wins on reload.
 
-## Managing skills
-
-Skill files live in: ${shortcutsDir}
-
-A skill file can describe one or more iOS Shortcuts, AND/OR contain behavior rules the user wants you to follow when certain situations come up. Examples of each:
-- **Shortcut skill**: "Add shortcut Send Email with fields to, subject, body"
-- **Behavior skill**: "From now on, when I say I'm planning a family trip, take my partner and kids into account, split activities by day, and offer alternatives"
-
-When the user asks to add, create, register, edit, remove, or delete a skill or shortcut (they may say "atajo", "shortcut", "skill", "raccourci", "regla", "rule", etc.), use the write/read tools to manage files in that directory.
-
-Steps:
-1. Identify what is provided and what is missing.
-   - For shortcut skills: shortcut name (exact, as on device), description, all data fields with types, and where it should run (mac or device).
-   - For behavior skills: the trigger condition and the rules to apply.
-2. Ask the user where the shortcut should run: on the Mac server (\`target: mac\`) or on the iOS device (\`target: device\`, default). Suggest \`mac\` when the shortcut creates content synced via iCloud (notes, reminders, calendar) or doesn't need direct interaction on the iOS device.
-3. If ANYTHING is missing or ambiguous, ask the user before proceeding. Do NOT invent names, fields, or rules.
-4. Show the user a short summary of what you understood and ask for confirmation before creating the file.
-5. Only after confirmation, create a .md file in ${shortcutsDir} with the proper format below.
-6. Confirm the result to the user via respond tool.
-
-### Required file format
-
-EVERY skill file MUST start with YAML frontmatter:
-
-\`\`\`markdown
----
-title: Human-readable title
-description: One short sentence describing the purpose (used in the skills index)
-shortcuts: [shortcutName1, shortcutName2]
-target: device
----
-
-### Display Name
-
-Body of the skill (shortcut definitions, behavior rules, etc.)
-\`\`\`
-
-Frontmatter rules:
-- \`title\`: short human-readable name
-- \`description\`: ONE sentence — this is what you (the agent) will see in the index, so make it specific enough to know when to load the skill
-- \`shortcuts\`: array of EVERY shortcut name defined in the file. Use \`[]\` for behavior-only skills with no shortcuts.
-- \`target\` (optional): \`mac\` to execute shortcuts on the Mac server, \`device\` to send to the iOS device (default). Use \`mac\` for shortcuts that create iCloud-synced content (notes, reminders, calendar) or don't need iOS device interaction. When a skill has \`target: mac\`, set \`run_on: "server"\` in the respond tool call.
-
-### Shortcut body format
-
-For each shortcut in the file:
-
-\`\`\`markdown
-### Display Name
-
-Shortcut name: \`ExactName\`
-
-Description.
-
-Data fields:
-- fieldName (type, required/optional): Description
-
-Example:
-{ "msg": "Status...", "shortcut": "ExactName", "data": { "field": "value" } }
-\`\`\`
-
-### Behavior skill body format
-
-For behavior rules (no shortcuts), use prose with sections describing the trigger, the rules to apply, and any examples. Be explicit and concrete.
-
-### File naming
-
-Use kebab-case for file names (e.g., new-playlist.md, family-trip.md, send-email.md).
-
-IMPORTANT: Skill files must ALWAYS be written in English, regardless of the language the user is speaking. Titles, descriptions, field descriptions, and rules must all be in English. Only the user's example values can stay in their original language.
+For skill file format (frontmatter, body, authoring flow) call \`load_doc("skills-format")\`. For custom tool file format call \`load_doc("custom-tools-format")\`.
 
 ## Workspace
 
-Your working directory is the \`workspace/\` folder. This is where you create projects, files, and other artifacts for the user. When the user asks to create a project (e.g., "create a Go + Templ project"), create it inside workspace/.
+Your working directory is \`workspace/\`. Create subfolders for each project (\`workspace/my-blog/\`, \`workspace/notes/\`) — never loose files in the root.
 
-IMPORTANT: NEVER create files directly in the workspace root. Always create a subfolder first (e.g., \`workspace/tracking/\`, \`workspace/notes/\`, \`workspace/my-project/\`). The workspace root should only contain project folders, not loose files.
+\`workspace/dashboard/\` is the user's personal \`/dashboard\` web page. For customization details, call \`load_doc("dashboard")\`.
 
-The workspace structure:
-- \`workspace/\` — Your working directory. Create projects and files here.
-- \`workspace/dashboard/\` — Custom dashboard files served at /dashboard.
+## Running things
+
+- **Programming tasks** (create project, review code, build, test, debug, refactor) → always \`run_code_job\`. One call creates the background job and sends the ack to the user. Do NOT use \`shell\`/\`read\`/\`write\` inline for heavy code work; PocketHook's HTTP request has a short timeout.
+- **Serving a dev project for the user to view** → \`start_server\` with \`tunnel: true\`. For framework-specific commands and binding rules, call \`load_doc("serving-projects")\`.
+- **Deep research, multi-page scraping, long reports** → \`create_job\` with \`execution_type: "prompt"\`. Respond immediately; the user is notified when the job finishes.
+- **Recurring tasks** ("every day at 8am", "weekly on Mondays") → \`create_job\` with \`type: "cron"\` and the appropriate schedule.
+- **Quick operations** (simple questions, single search, reading one file the user asked about, listing jobs/servers, starting/stopping servers) → answer inline.
+- If your message starts with \`[BACKGROUND JOB]\`, you are already running inside one — do the work directly, do not create more jobs.
+
+## Web research
+
+When the user asks to search, compare, look something up: use \`web_search\` for relevant results, then \`web_fetch\` to read the most promising pages, and summarize. Include relevant URLs in the \`url\` field. Do NOT return raw Google search URLs.
 
 ## Versioning & undo
 
-All changes are versioned automatically for safety:
-- **Workspace files** are tracked with git (auto-committed on each write). To undo, run: \`git revert HEAD\` in the workspace directory.
-- **Config files** (agent-instructions.md, skills/, permissions.json) are backed up to \`data/backups/\` before each change.
+Changes are versioned automatically. Workspace files are tracked with git (auto-commit on each write). Config files (\`agent-instructions.md\`, \`skills/\`, \`permissions.json\`) are backed up to \`data/backups/\` before each change. To undo: \`git log --oneline -5\` + \`git revert HEAD --no-edit\` in workspace for workspace changes; \`ls data/backups/\` + \`cp\` to restore for config files.
 
-When the user asks to undo, revert, or roll back a change:
-- For workspace files: use shell to run \`git log --oneline -5\` in workspace/ to show recent changes, then \`git revert HEAD --no-edit\` to undo the last one.
-- For config files: use shell to \`ls data/backups/\` to find backups, then \`cp data/backups/{file}.{timestamp} {original_path}\` to restore.
+## General rules
 
-## Dashboard customization
-
-The user has a personal web dashboard at /dashboard. There are two ways to customize it:
-
-### Option A: Single HTML file (simple, quick edits)
-Edit: ${join(PROJECT_ROOT, "workspace", "dashboard", "dashboard.html")}
-- Best for simple customizations, quick changes, or when the user asks to tweak the dashboard.
-- The HTML is a complete standalone page (inline CSS and JS).
-- Changes are picked up automatically (hot-reloaded).
-- Use this approach by default unless the user explicitly asks for a framework or full project.
-
-### Option B: Full project with build (Svelte, React, Vue, etc.)
-Create a project in: ${join(PROJECT_ROOT, "workspace", "dashboard")}
-- Use when the user explicitly asks for a framework (e.g., "create a Svelte dashboard", "build a React dashboard").
-- The build output MUST go to \`dist/\` inside the dashboard directory. Configure the framework's build to output to \`${join(PROJECT_ROOT, "workspace", "dashboard", "dist")}\`.
-- The server serves all static files from \`dist/\` under \`/dashboard/\` (JS, CSS, images, fonts, etc.).
-- After building, \`dist/index.html\` is served at \`/dashboard\`.
-- Asset paths in the built HTML should be relative (e.g., \`./assets/index.js\`, not \`/assets/index.js\`). Configure the framework's base path accordingly (e.g., Vite: \`base: "/dashboard/"\`).
-- After creating the project, install dependencies and run the build. Verify the build succeeded.
-- This is a longer task — consider using a background job.
-
-### Priority order
-The server serves: \`dist/index.html\` > \`dashboard.html\` > built-in default.
-
-### Common to both options
-- The dashboard can fetch \`/api/jobs\` to get job data as JSON.
-- If the user asks to change the dashboard and one already exists, read the current files first, then modify.
-- If no custom dashboard exists yet, create one based on the user's requirements.
-
-## Serving projects
-
-You have tools to manage dev servers for workspace projects: \`start_server\`, \`stop_server\`, \`list_servers\`.
-
-**Be proactive**: When you create a web project (Hugo, Astro, Next.js, Flask, Go, etc.), ALWAYS offer to serve it. Ask the user:
-1. **Preview only** — start a temporary dev server (local access on a port). It runs until the main server stops or the user asks to stop it.
-2. **Expose publicly** — start the dev server AND create an HTTPS tunnel so it's accessible from anywhere (requires Tailscale, ngrok, or cloudflared).
-
-### How to serve a project
-- Use the \`start_server\` tool with the project's dev command.
-- Use \`$PORT\` as a placeholder in the command — it gets replaced with the assigned port.
-- Examples:
-  - Hugo: \`start_server({ name: "My Blog", command: "hugo server -p $PORT --bind 0.0.0.0", cwd: "workspace/my-blog" })\`
-  - Vite/Node: \`start_server({ name: "React App", command: "npm run dev -- --port $PORT --host", cwd: "workspace/my-app" })\`
-  - Python: \`start_server({ name: "Flask API", command: "python app.py --port $PORT", cwd: "workspace/my-api" })\`
-  - Go: \`start_server({ name: "Go Server", command: "go run . -port $PORT", cwd: "workspace/my-server" })\`
-- Set \`tunnel: true\` to expose via HTTPS tunnel.
-- Use \`list_servers\` to show running servers.
-- Use \`stop_server\` to stop one.
-
-### Important
-- Always include \`--bind 0.0.0.0\` or \`--host\` flags when available, so the server is accessible from the network (needed for tunnels).
-- After starting, report the local URL (and tunnel URL if applicable) to the user.
-- If the user asks about running servers or active services, you can use shell commands to scan the system for a full picture. But ALWAYS also call \`list_servers\` to know which ones you started. When reporting, clearly distinguish between servers you manage (from \`list_servers\`) and other services running on the system that you didn't start. Note: pockethook-agent-server (this server, typically on port ${process.env.PORT || "3000"}) is YOU — don't report it as a separate service, it's the server you're running on.
-
-## Examples
-
-Simple reply:
-  respond({ steps: [{ msg: "Here are 10 cat breeds..." }] })
-
-Trigger shortcut:
-  respond({ steps: [{ msg: "Creating your note...", shortcut: "New Note", data: { title: "Cat Breeds", content: "1. Persian\\n2. Siamese..." } }] })
-
-Multi-step:
-  respond({ steps: [
-    { msg: "Fetching...", shortcut: "Fetch Data", data: { source: "api" } },
-    { msg: "Done!", shortcut: "Notify", data: { title: "Done" } }
-  ] })
-
-## Custom tools
-
-You can install and register new tools that extend your capabilities. Custom tools are shell commands wrapped as agent tools, defined as .md files in: ${CUSTOM_TOOLS_DIR}
-
-### When to create a custom tool
-When the user asks you to install a CLI tool or library and use it for tasks (e.g., "install playwright and take screenshots", "install ffmpeg and convert videos"), you should:
-1. Install the dependency using shell (e.g., \`bun add playwright\`, \`brew install ffmpeg\`)
-2. Create a custom tool definition in \`${CUSTOM_TOOLS_DIR}\` so you can use it in future conversations
-3. Confirm to the user what was installed and what the new tool can do
-
-### Custom tool file format
-\`\`\`markdown
-### Tool Display Name
-
-Tool name: \`tool_name\`
-
-Description of what it does.
-
-Install: \`command to install dependencies\`
-
-Command: \`command with $param placeholders\`
-
-Parameters:
-- paramName (type, required/optional): Description. Default: value
-\`\`\`
-
-### Rules
-- Tool name must be lowercase with underscores (e.g., \`web_screenshot\`, \`pdf_convert\`)
-- Use \`$paramName\` in the Command to substitute parameter values
-- The Install command runs automatically the first time the tool is used (only once)
-- One tool per file, kebab-case file names (e.g., \`web-screenshot.md\`)
-- Custom tools are hot-reloaded — available on the next request after creation
-- If the user asks "what tools do you have?", list both built-in and custom tools
-
-Keep responses concise. You can use Markdown in msg (bold, code blocks, lists, etc.).${onboardingBlock}`;
+- ALWAYS respond in the same language the user is using.
+- Be concise. Show results, not process. Never use ASCII tables — use bullet lists or key: value lines.
+- \`pockethook-agent-server\` (typically port ${process.env.PORT || "3000"}) is YOU — don't report it as a separate service when listing running processes.${onboardingBlock}`;
 }
 
 let BASE_SYSTEM_PROMPT: string | null = null;
@@ -507,12 +241,121 @@ function getInstructions(): string {
   return cachedInstructions;
 }
 
+// ── User instructions (hot-reloaded from data/user/instructions.md) ─────
+
+let cachedUserInstructions: string = "";
+let cachedUserInstructionsMtime: number = 0;
+
+function loadUserInstructions(): string {
+  if (!existsSync(USER_INSTRUCTIONS_PATH)) return "";
+  try {
+    const content = readFileSync(USER_INSTRUCTIONS_PATH, "utf-8").trim();
+    return content ? "\n\n## User instructions\n\n" + content : "";
+  } catch {
+    return "";
+  }
+}
+
+function getUserInstructions(): string {
+  try {
+    const mtime = statSync(USER_INSTRUCTIONS_PATH).mtimeMs;
+    if (mtime !== cachedUserInstructionsMtime) {
+      cachedUserInstructions = loadUserInstructions();
+      cachedUserInstructionsMtime = mtime;
+      if (cachedUserInstructions) {
+        logger.info("User instructions reloaded.");
+      }
+    }
+  } catch {
+    if (cachedUserInstructions) {
+      cachedUserInstructions = "";
+      cachedUserInstructionsMtime = 0;
+    }
+  }
+  return cachedUserInstructions;
+}
+
+// ── User prefs (hot-reloaded from data/user/prefs.json) ─────────────────
+
+let cachedUserPrefs: Record<string, unknown> = {};
+let cachedUserPrefsMtime: number = 0;
+
+function loadUserPrefs(): Record<string, unknown> {
+  if (!existsSync(USER_PREFS_PATH)) return {};
+  try {
+    const content = readFileSync(USER_PREFS_PATH, "utf-8").trim();
+    if (!content) return {};
+    const parsed = JSON.parse(content);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (err: any) {
+    logger.warn(`Failed to parse ${USER_PREFS_PATH}: ${err.message}`);
+    return {};
+  }
+}
+
+export function getUserPrefs(): Record<string, unknown> {
+  try {
+    const mtime = statSync(USER_PREFS_PATH).mtimeMs;
+    if (mtime !== cachedUserPrefsMtime) {
+      cachedUserPrefs = loadUserPrefs();
+      cachedUserPrefsMtime = mtime;
+      logger.info("User prefs reloaded.");
+    }
+  } catch {
+    if (Object.keys(cachedUserPrefs).length > 0) {
+      cachedUserPrefs = {};
+      cachedUserPrefsMtime = 0;
+    }
+  }
+  return cachedUserPrefs;
+}
+
+/**
+ * Substitute `{{prefs.key}}` and `{{prefs.nested.key}}` placeholders in
+ * text with values from data/user/prefs.json. Unknown keys are left
+ * untouched so authors can spot typos visually.
+ */
+export function interpolatePrefs(text: string): string {
+  if (!text.includes("{{prefs.")) return text;
+  const prefs = getUserPrefs();
+  return text.replace(/\{\{prefs\.([\w.]+)\}\}/g, (match, path: string) => {
+    const parts = path.split(".");
+    let cursor: any = prefs;
+    for (const part of parts) {
+      if (cursor && typeof cursor === "object" && part in cursor) {
+        cursor = cursor[part];
+      } else {
+        return match;
+      }
+    }
+    if (cursor === null || cursor === undefined) return match;
+    return typeof cursor === "string" ? cursor : JSON.stringify(cursor);
+  });
+}
+
+// ── User customization paths ────────────────────────────────────────────
+//
+// Base directories (shipped with the repo, treated as read-only by the agent):
+//   skills/ , custom-tools/ , agent-instructions.md
+//
+// User-local directories (under data/, git-ignored, written by the agent):
+//   data/user/skills/           — user-authored skills override base on name collision
+//   data/user/custom-tools/     — user-installed custom tools
+//   data/user/instructions.md   — user additions to agent-instructions.md
+//   data/user/prefs.json        — typed user values referenced as {{prefs.key}} in skills
+
+export const USER_DIR = join(PROJECT_ROOT, "data", "user");
+export const USER_SKILLS_DIR = join(USER_DIR, "skills");
+export const USER_CUSTOM_TOOLS_DIR = join(USER_DIR, "custom-tools");
+export const USER_INSTRUCTIONS_PATH = join(USER_DIR, "instructions.md");
+export const USER_PREFS_PATH = join(USER_DIR, "prefs.json");
+
 // ── Skills (hot-reloaded from skills/ directory) ────────────────────────
 
 export const SKILLS_DIR = join(PROJECT_ROOT, "skills");
 let cachedSkillsIndex: string = "";
 let cachedSkillsMtime: number = 0;
-let cachedSkillsMap: Map<string, { file: string; title: string; description: string; target?: "mac" | "device"; syncApp?: string }> = new Map();
+let cachedSkillsMap: Map<string, { file: string; dir: string; source: "base" | "user"; title: string; description: string; target?: "mac" | "device"; syncApp?: string }> = new Map();
 let cachedShortcutToSkill: Map<string, string> = new Map();
 
 export interface SkillMeta {
@@ -523,18 +366,21 @@ export interface SkillMeta {
 }
 
 /**
- * Get the latest mtime across all files in skills/.
+ * Get the latest mtime across all skill files, scanning both the base
+ * `skills/` directory and the user overlay at `data/user/skills/`.
  */
 function getSkillsMaxMtime(): number {
-  if (!existsSync(SKILLS_DIR)) return 0;
   let maxMtime = 0;
-  try {
-    const files = readdirSync(SKILLS_DIR).filter((f) => f.endsWith(".md") || f.endsWith(".txt"));
-    for (const file of files) {
-      const mtime = statSync(join(SKILLS_DIR, file)).mtimeMs;
-      if (mtime > maxMtime) maxMtime = mtime;
-    }
-  } catch {}
+  for (const dir of [SKILLS_DIR, USER_SKILLS_DIR]) {
+    if (!existsSync(dir)) continue;
+    try {
+      const files = readdirSync(dir).filter((f) => f.endsWith(".md") || f.endsWith(".txt"));
+      for (const file of files) {
+        const mtime = statSync(join(dir, file)).mtimeMs;
+        if (mtime > maxMtime) maxMtime = mtime;
+      }
+    } catch {}
+  }
   return maxMtime;
 }
 
@@ -616,51 +462,85 @@ function parseSkillMeta(filename: string, content: string): SkillMeta & { shortc
 }
 
 /**
- * Load skill metadata index from skills/ directory.
- * Returns a short index for the system prompt and populates the cache map.
+ * Load skill metadata index from both the base `skills/` directory and the
+ * user overlay at `data/user/skills/`. User-authored skills override base
+ * skills on name collision (same filename wins for the user). Returns a
+ * short index for the system prompt and populates the cache map.
  */
 function loadSkillsIndex(): string {
   cachedSkillsMap.clear();
   cachedShortcutToSkill.clear();
-  if (!existsSync(SKILLS_DIR)) return "";
-  try {
-    const files = readdirSync(SKILLS_DIR)
-      .filter((f) => f.endsWith(".md") || f.endsWith(".txt"))
-      .sort();
-    if (files.length === 0) return "";
 
-    const entries: string[] = [];
-    for (const file of files) {
-      const content = readFileSync(join(SKILLS_DIR, file), "utf-8");
-      const meta = parseSkillMeta(file, content);
-      cachedSkillsMap.set(meta.name, { file, title: meta.title, description: meta.description, target: meta.target, syncApp: meta.syncApp });
-      if (meta.shortcuts) {
-        for (const sc of meta.shortcuts) {
-          cachedShortcutToSkill.set(sc, meta.name);
+  // Load base first, then user so user overrides base on name collision.
+  const sources: Array<{ dir: string; source: "base" | "user" }> = [
+    { dir: SKILLS_DIR, source: "base" },
+    { dir: USER_SKILLS_DIR, source: "user" },
+  ];
+
+  for (const { dir, source } of sources) {
+    if (!existsSync(dir)) continue;
+    try {
+      const files = readdirSync(dir)
+        .filter((f) => f.endsWith(".md") || f.endsWith(".txt"))
+        .sort();
+      for (const file of files) {
+        const content = readFileSync(join(dir, file), "utf-8");
+        const meta = parseSkillMeta(file, content);
+        cachedSkillsMap.set(meta.name, {
+          file,
+          dir,
+          source,
+          title: meta.title,
+          description: meta.description,
+          target: meta.target,
+          syncApp: meta.syncApp,
+        });
+        if (meta.shortcuts) {
+          for (const sc of meta.shortcuts) {
+            cachedShortcutToSkill.set(sc, meta.name);
+          }
         }
       }
-      const shortcutsLine = meta.shortcuts && meta.shortcuts.length > 0
-        ? ` [shortcuts: ${meta.shortcuts.join(", ")}]`
-        : "";
-      const targetLine = meta.target === "mac" ? " [target: mac]" : "";
-      entries.push(`- **${meta.name}** — ${meta.title}: ${meta.description}${shortcutsLine}${targetLine}`);
-    }
-
-    return "\n\n## Available Skills\n\nThe following skills are available. Use the `load_skill` tool to load the full content of any skill when you need to use it.\n\n" + entries.join("\n");
-  } catch {
-    return "";
+    } catch {}
   }
+
+  if (cachedSkillsMap.size === 0) return "";
+
+  const entries: string[] = [];
+  const names = [...cachedSkillsMap.keys()].sort();
+  for (const name of names) {
+    const meta = cachedSkillsMap.get(name)!;
+    // Re-parse to get shortcuts list for the index line (kept in cache via shortcut map only)
+    let shortcuts: string[] | undefined;
+    try {
+      const content = readFileSync(join(meta.dir, meta.file), "utf-8");
+      const parsed = parseSkillMeta(meta.file, content);
+      shortcuts = parsed.shortcuts;
+    } catch {}
+    const shortcutsLine = shortcuts && shortcuts.length > 0
+      ? ` [shortcuts: ${shortcuts.join(", ")}]`
+      : "";
+    const targetLine = meta.target === "mac" ? " [target: mac]" : "";
+    entries.push(`- **${name}** — ${meta.title}: ${meta.description}${shortcutsLine}${targetLine}`);
+  }
+
+  return "\n\n## Available Skills\n\nThe following skills are available. Use the `load_skill` tool to load the full content of any skill when you need to use it.\n\n" + entries.join("\n");
 }
 
 /**
  * Get the full content of a skill by name.
  * Used by the load_skill tool.
+ *
+ * Reads from whichever directory the skill was loaded from (base or user
+ * overlay). If user prefs are defined, `{{prefs.<key>}}` placeholders in
+ * the content are substituted with values from data/user/prefs.json.
  */
 export function getSkillContent(name: string): string | null {
   const meta = cachedSkillsMap.get(name);
   if (!meta) return null;
   try {
-    return readFileSync(join(SKILLS_DIR, meta.file), "utf-8");
+    const raw = readFileSync(join(meta.dir, meta.file), "utf-8");
+    return interpolatePrefs(raw);
   } catch {
     return null;
   }
@@ -867,7 +747,7 @@ export function getSystemPrompt(agentName: string, vectorMemoryEnabled: boolean 
     }
   }
 
-  return BASE_SYSTEM_PROMPT + getPersonality() + formatCurrentDate() + cachedLocalePrompt + getInstructions() + cachedSkillsIndex + cachedDocsIndex + getCustomToolsPrompt();
+  return BASE_SYSTEM_PROMPT + getPersonality() + formatCurrentDate() + cachedLocalePrompt + getInstructions() + getUserInstructions() + cachedSkillsIndex + cachedDocsIndex + getCustomToolsPrompt();
 }
 
 // ── Config ──────────────────────────────────────────────────────────────

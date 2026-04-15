@@ -1,6 +1,6 @@
 {
   "name": "pockethook-agent-server",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "PocketHook agent server with LLM integration via pi-ai",
   "type": "module",
   "scripts": {

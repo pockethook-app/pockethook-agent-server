@@ -13,12 +13,17 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and mul
 - **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter, Ollama, LM Studio
 - **OAuth authentication** — GitHub Copilot and OpenAI Codex via device code / browser flow
 - **Agent tools** — Shell, file read/write, directory listing, background jobs, web search, web scraping, dev server management
+- **`run_code_job` meta-tool** — One call creates a Claude Code background job AND sends the user an immediate ack. Replaces the error-prone respond-then-create_job pattern for programming tasks
 - **Background jobs** — Schedule one-time or recurring tasks with cron expressions
-- **Dev server management** — Start, stop, and list dev servers for workspace projects with optional HTTPS tunnel exposure
-- **Dynamic skills** — Define shortcuts and behavior rules as `.md` files in `skills/` with YAML frontmatter. Only a compact index is loaded into the prompt; full content is fetched on demand via the `load_skill` tool
+- **Dev server management** — Start, stop, and list dev servers for workspace projects with optional HTTPS tunnel exposure. `tunnel: true` is enforced: if no tunnel tool is installed or setup fails, the server refuses to start an unreachable localhost process
+- **Dynamic skills** — Define shortcuts and behavior rules as `.md` files with YAML frontmatter. Only a compact index is loaded into the prompt; full content is fetched on demand via the `load_skill` tool
 - **Server-side shortcuts** — Execute shortcuts on the Mac server instead of the iOS device via `shortcuts run` CLI. Ideal for iCloud-synced actions (notes, calendar, reminders). Configure per-skill with `target: mac` and optional `sync_app` for automatic iCloud sync
-- **Self-managing skills** — The agent can create, edit, and delete skill definitions
-- **Agent instructions** — Editable `agent-instructions.md` to customize agent behavior, hot-reloaded
+- **User customization overlay** — Framework files (`skills/`, `custom-tools/`, `agent-instructions.md`) are read-only. Per-deployment customization lives under `data/user/` (skills, custom tools, instructions, typed prefs). Framework updates land cleanly without clobbering user data
+- **Typed user prefs with `{{prefs.*}}` interpolation** — Store values in `data/user/prefs.json`; reference them in skills as `{{prefs.routeOrigin}}` and the server substitutes on load
+- **Self-managing skills** — The agent can create, edit, and delete skill definitions (writes always go to the user layer)
+- **Agent instructions** — Editable `agent-instructions.md` (framework defaults) + `data/user/instructions.md` (user additions), both hot-reloaded
+- **Automatic URL sanitization** — The `respond` tool rewrites `localhost`/`127.0.0.1` URLs to the corresponding tunnel URL when a managed server has one, and logs a warning when it can't — so the iOS device never receives an unreachable link
+- **Loadable doc system** — Long procedural details (content rendering, skills format, custom tools format, dashboard, serving projects, memory guide) live in `docs/` and are fetched on demand via `load_doc`, keeping the base prompt compact
 - **Semantic memory** — Vector-based search with embeddings (Ollama, LM Studio, or OpenAI) stored in a separate `knowledge.db`. Memories are auto-classified into wing/room/hall/status dimensions by the LLM
 - **Knowledge graph** — Temporal triple store for durable facts with auto-invalidation. Multi-value relationships (children, friends) coexist; single-value facts (lives_in, partner) auto-replace
 - **PARA method** — Every memory is tagged with a status (Project, Area, Resource, Archive). Projects are closed with semantic similarity matching; reference material survives project closures
@@ -215,9 +220,48 @@ bun run service stop       # Temporarily stop
 bun run service uninstall  # Remove service and tunnel config
 ```
 
+## User customization layout
+
+The runtime separates **framework files** (shipped with the repo, read-only for the agent) from **user files** (per-deployment, written by the agent on the user's behalf). This split keeps framework updates clean from user data.
+
+```
+pockethook-agent-server/
+├── skills/                 # framework-shipped skills (read-only)
+├── custom-tools/           # framework-shipped custom tool templates (read-only)
+├── agent-instructions.md   # framework agent instructions (read-only)
+└── data/
+    └── user/               # git-ignored, per deployment
+        ├── skills/         # user-authored skills (override base on filename)
+        ├── custom-tools/   # user-installed custom tools
+        ├── instructions.md # user additions to agent instructions
+        └── prefs.json      # typed user values, referenced as {{prefs.key}}
+```
+
+The agent is told to write all new or edited content to `data/user/*`. The `write` tool enforces this at the code level: any attempt to write into `skills/`, `custom-tools/`, or `agent-instructions.md` is rejected with an error pointing at the correct user-layer path.
+
+### Typed preferences
+
+`data/user/prefs.json` holds arbitrary JSON — scalar values, nested objects, whatever. Skills reference values as `{{prefs.routeOrigin}}` or `{{prefs.tunnel.domain}}` and the server substitutes them when the skill is loaded (via `load_skill`). Unknown keys are left as-is so typos are visible.
+
+Example:
+
+```json
+{
+  "routeOrigin": "Madrid, Spain",
+  "preferredMapsApp": "apple",
+  "tunnel": { "domain": "my-host.ts.net" }
+}
+```
+
+### Migrating personal content out of the base
+
+Don't edit `skills/route-planner.md`, `skills/calendar-actions.md`, etc. in place. Copy into `data/user/skills/` first and edit the copy — the overlay wins on reload.
+
 ## Skills
 
-Skills are `.md` files in `skills/` that define iOS Shortcuts the agent can trigger and/or behavior rules for the agent to follow. They use **dynamic loading**: only a compact index (title, description, shortcut list) is injected into the system prompt. The agent loads the full content on demand via the `load_skill` tool, keeping token usage low as you add more skills.
+Skills are `.md` files that define iOS Shortcuts the agent can trigger and/or behavior rules for the agent to follow. They use **dynamic loading**: only a compact index (title, description, shortcut list) is injected into the system prompt. The agent loads the full content on demand via the `load_skill` tool, keeping token usage low as you add more skills.
+
+The runtime scans both `skills/` and `data/user/skills/`; user-authored skills override base on filename collision. See [docs/skills-format.md](docs/skills-format.md) for the full authoring reference.
 
 Each skill file should start with YAML frontmatter:
 
@@ -281,7 +325,12 @@ You can also choose **Custom** to write your own personality description. Emoji 
 
 ## Agent Instructions
 
-Edit `agent-instructions.md` in the project root to customize how the agent works — its methodology, coding style, communication preferences, etc. Changes are picked up automatically without restarting.
+Two layers, both hot-reloaded:
+
+- `agent-instructions.md` (project root) — framework defaults. Read-only for the agent; edit directly if you're customizing your own deployment but note that framework updates may overwrite it.
+- `data/user/instructions.md` — user-specific additions. Anything the user asks the agent to apply globally ("always answer in English", "never use tables", "prefer concise responses") is appended here by the agent. Survives framework updates.
+
+Both files are concatenated into the system prompt. No restart needed.
 
 ## Background Jobs
 
@@ -317,6 +366,16 @@ Completed results are delivered **instantly without LLM processing** — stored 
 ### Agent tools
 
 The agent has three job management tools: `create_job`, `list_jobs`, `delete_job`.
+
+### `run_code_job` (programming tasks)
+
+For any programming task (create project, audit code, debug, build, test, refactor), the agent uses `run_code_job` instead of `create_job` directly. The meta-tool:
+
+1. Composes the `claude --print --dangerously-skip-permissions` invocation with the right working directory and escaping.
+2. Creates a shell `once` job with a sensible default timeout (`30m`).
+3. Emits the user-facing ack immediately through the same `respond` channel — the user doesn't wait for the LLM to orchestrate two calls.
+
+Parameters: `task` (required), `project_dir` (optional, relative to `workspace/` or absolute), `timeout` (optional, default `30m`), `ack_message` (optional). See [docs/memory-guide.md](docs/memory-guide.md) and [skills/claude-code.md](skills/claude-code.md) for context on how the job runs.
 
 ### Web tools
 
@@ -369,8 +428,10 @@ Custom tools follow the same hot-reload pattern as skills. The agent can create,
 
 Granular tool permissions are stored in `permissions.json` (configure via `bun run permissions` or `bun run setup`):
 
-- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`, `start_server`, `stop_server`, `list_servers`, `search_memory`, `remember_fact`, `query_facts`, `load_skill`, `update_memory_status`, `complete_project`
+- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`, `start_server`, `stop_server`, `list_servers`, `search_memory`, `remember_fact`, `query_facts`, `load_skill`, `load_doc`, `update_memory_status`, `complete_project`
+- **Always-on tools** (not gated by `permissions.json`): `respond`, `run_code_job` — both wired to the same response channel so they cannot be missing
 - **Working directory boundary** — Prevents the agent from escaping `WORKING_DIR`
+- **Base-path write guard** — The `write` tool rejects any path under `skills/`, `custom-tools/`, or `agent-instructions.md` and redirects the agent to `data/user/*`
 - **Blocked shell commands** — e.g., `sudo`, `rm -rf /`, `shutdown`
 - **Blocked shell patterns** — Regex patterns like `curl.*\|.*sh`
 - **Blocked filesystem paths** — e.g., `.env`, `.git`
@@ -419,6 +480,14 @@ Requires `VECTOR_MEMORY=true` and an embedding provider (Ollama, LM Studio, or O
 
 **PARA lifecycle** — When a project completes or is cancelled, `complete_project` uses semantic similarity to archive only the relevant project's vectors while preserving reference material (lists, recommendations) as `resource` for future use.
 
+**Project-end cascade** — `complete_project` accepts an optional `project_slug` and `reason` (`"cancelled"` or `"completed"`). When provided, the handler:
+
+1. Archives the project's vectors (events, decisions, requests).
+2. Invalidates every active triple whose predicate is the slug exactly or ends in `_<slug>` (so `scheduled_visit_barcelona`, `planning_visit_barcelona`, and `confirmed_visit_barcelona` all close, while `scheduled_revisit_barcelona` is left alone).
+3. Records a single completion triple, e.g., `(user, "cancelled_visit_barcelona", "2026-04-15")`.
+
+This replaces the error-prone three-call pattern (`complete_project` → `remember_fact` → `respond`) with a single call. The prompt no longer carries the orchestration rule.
+
 If `VECTOR_MEMORY` is disabled or the embedding provider is unreachable, the system falls back to FTS5-only with no errors.
 
 ## Project structure
@@ -427,14 +496,14 @@ If `VECTOR_MEMORY` is disabled or the embedding provider is unreachable, the sys
 pockethook-agent-server/
 ├── src/
 │   ├── index.ts          # HTTP server, routing, job delivery
-│   ├── config.ts         # Config loading, system prompt, hot-reload
+│   ├── config.ts         # Config loading, system prompt, hot-reload, user overlay + prefs
 │   ├── dashboard.ts      # Web dashboard HTML and jobs API
-│   ├── llm.ts            # Agent execution, LLM communication, quickPrompt
-│   ├── tools.ts          # Tool implementations (shell, files, jobs, memory, skills)
+│   ├── llm.ts            # Agent execution, LLM communication, respond/run_code_job wiring
+│   ├── tools.ts          # Tool implementations (shell, files, jobs, memory, skills, run_code_job)
 │   ├── embeddings.ts     # Multi-provider embedding client (Ollama, LM Studio, OpenAI)
 │   ├── vector-memory.ts  # Palace-style vector store with LLM classification
-│   ├── knowledge-graph.ts # Temporal triple store with auto-invalidation
-│   ├── custom-tools.ts   # Custom tool loader (hot-reload from custom-tools/*.md)
+│   ├── knowledge-graph.ts # Temporal triple store + slug-based cascade invalidation
+│   ├── custom-tools.ts   # Custom tool loader with base + data/user/custom-tools overlay
 │   ├── servers.ts        # Dev server process manager (start/stop/list, tunnel)
 │   ├── versioning.ts     # Workspace git + config backups
 │   ├── jobs.ts           # Background job system, cron scheduler
@@ -448,16 +517,35 @@ pockethook-agent-server/
 │   ├── service.ts        # System service management
 │   ├── tunnel.ts         # HTTPS tunnel setup
 │   └── dev-tunnel.ts     # Combined dev server + tunnel
-├── skills/               # Hot-reloadable shortcut definitions
-├── custom-tools/         # Hot-reloadable custom tool definitions
-├── data/                 # Runtime data (memory.db, knowledge.db, service metadata, backups)
+├── skills/               # Framework-shipped skill definitions (read-only)
+├── custom-tools/         # Framework-shipped custom tool templates (read-only)
+├── docs/                 # Loadable reference docs (fetched via load_doc on demand)
+├── data/                 # Runtime data (memory.db, knowledge.db, backups, and user/ overlay)
+│   └── user/             # Per-deployment customization (git-ignored)
+│       ├── skills/       # User-authored skills (override base)
+│       ├── custom-tools/ # User-installed custom tools
+│       ├── instructions.md # User additions to agent instructions
+│       └── prefs.json    # Typed user values (referenced as {{prefs.key}} in skills)
 ├── workspace/            # Agent's working directory
 │   └── dashboard/        # Custom dashboard files (hot-reloaded)
-├── agent-instructions.md # Editable agent behavior (hot-reloaded)
+├── agent-instructions.md # Base agent instructions (hot-reloaded)
 ├── personality.md        # Agent personality and emoji config (hot-reloaded)
 ├── permissions.json      # Tool permissions config
 └── .env                  # Runtime configuration
 ```
+
+### Loadable docs (`docs/`)
+
+Long procedural references that don't need to live in the base prompt. Fetched on demand via the `load_doc` tool when the agent needs them.
+
+| Doc | Load when |
+|-----|-----------|
+| `content-rendering.md` | Composing rich messages (markdown, HTML, images, buttons) |
+| `skills-format.md` | Creating or editing a skill file |
+| `custom-tools-format.md` | Installing a new CLI library and wiring it as a tool |
+| `dashboard.md` | Customizing the `/dashboard` web page |
+| `serving-projects.md` | Starting a dev server, choosing tunnel mode, framework commands |
+| `memory-guide.md` | What to store, format conventions, PARA, evolving events |
 
 ## Testing
 

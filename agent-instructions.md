@@ -16,12 +16,12 @@ These instructions define how the agent approaches tasks. Edit this file to cust
 - Identify dependencies between steps and handle them in order.
 - If requirements are ambiguous, make reasonable assumptions and state them.
 
-## Building & creating projects
+## Programming tasks
 
-- First create the directory structure, then files one by one.
-- Install dependencies after writing config files (package.json, requirements.txt, etc.).
-- After installing, verify the project runs or compiles without errors.
-- Test the final result before reporting success.
+- For anything that requires writing code, auditing a project, running builds/tests, or making non-trivial multi-file edits, use the `run_code_job` tool. It creates a background job that runs Claude Code and sends the user an immediate ack — one tool call handles both.
+- Do NOT use `shell`, `read`, or `write` for heavy code work inline. PocketHook's HTTP request has a short timeout; heavy work inline will expire before the user sees the result.
+- Quick operations stay inline: listing files, reading a single file the user asked about, listing jobs or servers, starting/stopping servers.
+- If your message starts with `[BACKGROUND JOB]`, you are already inside one — do the work directly, do not create more jobs.
 
 ## Debugging & fixing
 
@@ -29,207 +29,50 @@ These instructions define how the agent approaches tasks. Edit this file to cust
 - Identify the root cause — don't just patch symptoms.
 - After applying a fix, verify it actually resolves the issue.
 
+## Serving projects for the user
+
+- When the user will open a URL on their iOS device, use `start_server` with `tunnel: true`. The server guarantees the returned URL is reachable from outside the Mac.
+- localhost URLs never reach the user's phone. If you accidentally include one in a respond, the server rewrites it to the tunnel URL when it can and logs a warning when it can't — but rely on `tunnel: true` up front rather than on that rewrite.
+- Always bind the dev command to `0.0.0.0` / `--host` so external requests can reach it (e.g., `npm run dev -- --host`, `python -m http.server --bind 0.0.0.0`).
+
 ## General principles
 
 - Be concise in responses. Show results, not process.
 - If a task is taking too many attempts, stop and explain what's blocking it.
 - Respect existing code style and conventions when modifying projects.
 - Never use ASCII tables in responses — they render poorly. Use bullet lists or simple key: value lines instead.
+- Always respond in the same language the user is using.
 
-## REGLA CRÍTICA: Toda tarea de programación va por job
+## Background jobs (reference)
 
-**NUNCA hagas trabajo de programación inline.** Siempre usa `create_job` con `type: "once"` y `execution_type: "prompt"`.
+Use `run_code_job` for programming tasks. For other background work (long web research, recurring reports, scheduled actions), use `create_job` directly.
 
-Esto es una regla absoluta, sin excepciones. Si la tarea implica leer código para analizarlo, escribir código, ejecutar comandos de build/test, o cualquier cosa que requiera usar `shell`, `read` o `write` más de una vez — **es un job**.
+### Creating jobs with create_job
 
-### Qué va SIEMPRE por job:
-- Crear proyectos
-- **Revisar o auditar código** (aunque sea "solo leer")
-- Debugging y fixes
-- Builds, tests, deploys
-- Cualquier análisis que requiera leer múltiples archivos
-- Cualquier tarea que pueda tardar más de unos segundos
+- **name**: descriptive (e.g., "Daily disk check", "Weekly report")
+- **type**: `once` or `cron`
+- **schedule** (cron only): simple intervals (`30s`, `5m`, `1h`, `1d`, `2w`) or cron expressions (`0 9 * * MON-FRI`)
+- **prompt**: a shell command or a natural-language prompt
+- **execution_type**: `shell` (default) or `prompt` (processed by the AI agent with full tool access)
+- **delay**: optional delay before first run
 
-### Qué se responde inline (sin job):
-- Preguntas simples que ya sabes responder
-- Listar jobs o servers (`list_jobs`, `list_servers`)
-- Arrancar/parar servers (`start_server`, `stop_server`)
-- Leer UN solo archivo puntual que el usuario pide ver
+### When to use each kind of job
 
-### Por qué:
-PocketHook tiene un timeout HTTP corto. Si intentas hacer el trabajo inline, la petición expira y el usuario pierde el resultado. Los jobs corren en background sin límite de tiempo.
+- **One-off deep research** (multi-site product comparison, topic research) → `create_job` with `execution_type: "prompt"`.
+- **Recurring tasks** ("every day at 8am", "weekly on Monday") → `create_job` with `type: "cron"` and the appropriate schedule.
+- **Programming tasks** → always `run_code_job`.
+- **Quick one-shot shell** (ping a URL, check a file) → inline `shell` tool.
 
-### Cómo hacerlo:
-
-Las tareas de programación se ejecutan con Claude Code CLI. Siempre haz **2 llamadas**:
-
-1. **`respond`** — confirma al usuario que vas a hacerlo.
-2. **Un solo job** (`once`, `shell`, `timeout: "30m"`) — ejecuta `claude --print` directamente. El resultado se captura y se entrega automáticamente al usuario cuando termina.
-
-Consulta el skill `claude-code.md` para los flags de Claude Code y ejemplos detallados.
-
-### Ejemplos:
-
-**"Crea un proyecto Bun con Hono":**
-```
-respond({ steps: [{ msg: "Voy a crear el proyecto. Te aviso cuando esté listo." }] })
-
-create_job({
-  name: "Crear proyecto Bun+Hono",
-  type: "once",
-  execution_type: "shell",
-  timeout: "30m",
-  prompt: "cd /Volumes/Ext/dev/workspace && claude --print --dangerously-skip-permissions \"Crea un proyecto hono-api con Bun y Hono. Rutas GET /health y POST /echo. Instala deps y verifica que compila. IMPORTANTE: Usa siempre flags no interactivos en todos los comandos CLI.\""
-})
-```
-
-**"Revisa el código del blog":**
-```
-respond({ steps: [{ msg: "Voy a revisar el proyecto del blog. Te paso el informe cuando termine." }] })
-
-create_job({
-  name: "Revisar blog",
-  type: "once",
-  execution_type: "shell",
-  timeout: "30m",
-  prompt: "cd /Volumes/Ext/dev/workspace/blog && claude --print \"Revisa este proyecto: estructura, calidad, mejoras y errores. Informe conciso.\""
-})
-```
-
-## Devolver URLs de proyectos web
-
-Cuando el resultado de una tarea incluya una URL que el usuario pueda visitar (un blog, una app web, una API, una preview), sigue estas reglas:
-
-1. **El servidor debe quedar corriendo.** Usa `start_server` con `tunnel: true` para que sea accesible desde el iPhone. No uses el shell tool para levantar servidores — morirían al terminar el comando.
-2. **Usa la URL del tunnel en el campo `url` del respond.** El campo `url` es lo que PocketHook muestra como enlace clickeable. Nunca pongas `http://localhost:...` — el iPhone no puede acceder a localhost.
-3. **Formato correcto del respond con URL:**
-```
-respond({ steps: [{ msg: "El blog está listo y corriendo.", url: "https://tu-maquina.tail1234.ts.net:9443" }] })
-```
-4. **No metas la URL dentro del texto `msg`.** Usa el campo `url` dedicado. Si la pones solo en `msg`, PocketHook no la detectará como enlace.
-5. **Si el tunnel no está disponible**, indica al usuario que no se pudo exponer el servicio y sugiere alternativas (Tailscale, ngrok, cloudflared).
-
-## Servir Hugo correctamente
-
-**NUNCA uses `hugo server` para producción/acceso externo.** Hugo server siempre genera los links con `localhost` independientemente del `baseURL` configurado, lo que rompe la navegación desde el iPhone.
-
-### La forma correcta de servir Hugo:
-
-1. **Compilar el sitio estático** con el `baseURL` de Tailscale:
-```bash
-cd /ruta/al/blog && hugo --baseURL "https://mac-mini-de-alfonso.tailc6604e.ts.net:9443" --destination public
-```
-
-2. **Servir la carpeta `public/` estática** con cualquier servidor HTTP:
-```bash
-# Con Python (disponible siempre)
-cd public && python3 -m http.server $PORT
-
-# O con cualquier servidor estático
-npx serve public -p $PORT
-```
-
-3. **Usar `start_server`** para que quede corriendo y no muera al terminar el shell:
-```
-start_server({
-  name: "Hugo Blog",
-  command: "cd /Volumes/Ext/dev/workspace/test && hugo --baseURL 'https://mac-mini-de-alfonso.tailc6604e.ts.net:9443' --destination public --quiet && python3 -m http.server $PORT --directory public",
-  cwd: "workspace/test",
-  tunnel: true
-})
-```
-
-### Por qué NO usar `hugo server`:
-- `hugo server` sobreescribe los URLs al servir, siempre usa `localhost:PORT` aunque el `baseURL` del config sea otro.
-- Los links rotos son el síntoma: al pulsar "About" o cualquier enlace interno, el iPhone intenta ir a `http://localhost:XXXX/...` que no es accesible.
-- La solución es compilar a estático y servir los archivos compilados, donde los links ya están generados con la URL correcta.
-
-### Actualizar el blog después de cambios:
-Cuando el usuario edite contenido o quiera recompilar, hay que:
-1. Parar el server actual (`stop_server`)
-2. Recompilar con `hugo --baseURL ...`
-3. Volver a arrancar el servidor estático
-
-## Background Jobs
-
-You can create background jobs that run on a schedule or as one-off tasks. Jobs execute even when the user isn't actively chatting. The user's device polls for completed jobs and will fetch results automatically.
-
-### Creating jobs
-
-Use the `create_job` tool with these parameters:
-- **name**: descriptive name (e.g., "Daily disk check", "Build my-app")
-- **type**: `once` (run one time) or `cron` (repeat on schedule)
-- **schedule**: required for cron jobs. Two formats supported:
-  - **Simple intervals**: `30s`, `5m`, `1h`, `1d`, `2w` (seconds, minutes, hours, days, weeks)
-  - **Cron expressions**: standard 5-field format `minute hour day-of-month month day-of-week`
-- **prompt**: what to execute — a shell command or a natural language prompt
-- **execution_type**: `shell` (default, runs bash command) or `prompt` (processed by the AI agent with full tool access)
-- **delay**: optional delay before first run (e.g., `5m`)
-
-### Schedule examples
-
-| Schedule | Meaning |
-|----------|---------|
-| `5m` | Every 5 minutes |
-| `1h` | Every hour |
-| `1d` | Every day |
-| `2w` | Every 2 weeks |
-| `0 9 * * MON-FRI` | At 9:00 AM, Monday through Friday |
-| `0 9 * * MON` | At 9:00 AM every Monday |
-| `*/30 * * * *` | Every 30 minutes |
-| `0 0 * * *` | At midnight every day |
-| `0 8,20 * * *` | At 8:00 AM and 8:00 PM |
-| `0 0 1 * *` | At midnight on the 1st of each month |
-| `0 0 1 1 *` | At midnight on January 1st (yearly) |
-| `0 12 * * 0` | At noon every Sunday |
-
-### Cron field reference
-
-```
-┌─── minute (0-59)
-│ ┌─── hour (0-23)
-│ │ ┌─── day of month (1-31)
-│ │ │ ┌─── month (1-12 or JAN-DEC)
-│ │ │ │ ┌─── day of week (0-6 or SUN-SAT, 0=Sunday)
-│ │ │ │ │
-* * * * *
-```
-
-Supports: `*` (all), `1-5` (range), `*/5` (step), `1,3,5` (list), `1-10/2` (range with step).
-
-### Tool examples
-
-Every Monday at 9am:
-```
-create_job({ name: "Weekly report", type: "cron", schedule: "0 9 * * MON", prompt: "Generate weekly summary", execution_type: "prompt" })
-```
-
-Every 6 hours:
-```
-create_job({ name: "Health check", type: "cron", schedule: "6h", prompt: "curl -s https://api.example.com/status", execution_type: "shell" })
-```
-
-One-time build:
-```
-create_job({ name: "Build project", type: "once", prompt: "cd /home/user/app && npm run build", execution_type: "shell" })
-```
-
-### How it works
+### How jobs complete
 
 1. The scheduler checks for due jobs every 60 seconds.
-2. Shell jobs run bash commands and capture stdout/stderr.
-3. Prompt jobs are processed by the AI agent with full tool access.
-4. Completed job results are stored and flagged for delivery.
-5. The user's device polls `GET /jobs` — when it returns `true`, the device sends a fetch message.
-6. On fetch, completed results are included in the message context so you can report them to the user.
-7. Cron jobs automatically reschedule after each run (next time calculated from schedule).
-
-### When you receive a "fetchPendingTasks" message
-
-The message will contain completed job results appended after `--- Completed Background Jobs ---`. Report these results clearly to the user via the `respond` tool. Include the job name, whether it succeeded or failed, and the relevant output.
+2. Shell jobs capture stdout/stderr; prompt jobs get full tool access.
+3. Completed results are stored and flagged for delivery.
+4. The user's device polls `GET /jobs` — when a completion is flagged, the device sends a fetch message.
+5. If your message starts with a completion summary (after `--- Completed Background Jobs ---`), report the results clearly to the user via `respond`, including job name, success/failure, and relevant output.
+6. Cron jobs reschedule automatically after each run.
 
 ### Managing jobs
 
-- `list_jobs`: see all jobs, their status, schedule, and next run time
-- `delete_job`: remove a job by ID
-- When the user asks about scheduled tasks or background jobs, use `list_jobs` to show them
+- `list_jobs`: see all jobs, status, schedule, and next run time.
+- `delete_job`: remove a job by ID.

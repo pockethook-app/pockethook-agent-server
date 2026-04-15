@@ -7,7 +7,8 @@
 
 import { spawn } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, statSync } from "fs";
-import { join, resolve, relative } from "path";
+import { dirname, join, resolve, relative } from "path";
+import { fileURLToPath } from "url";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { Permissions } from "./permissions.js";
@@ -32,6 +33,48 @@ function denied(reason: string): AgentToolResult<unknown> {
     content: [{ type: "text", text: `Permission denied: ${reason}` }],
     details: { denied: true, reason },
   };
+}
+
+// ── Base-path write guard ───────────────────────────────────────────────
+//
+// The framework ships `skills/`, `custom-tools/`, and `agent-instructions.md`
+// as read-only base files. Any user-authored content (new skills, custom
+// tools, global behavior rules) must go into `data/user/` instead so that
+// framework updates don't clobber user data. This guard is applied to the
+// `write` tool — shell is left unguarded (too many ways to write via shell;
+// we rely on the prompt + this guard being explicit enough).
+
+const TOOLS_PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const USER_INSTRUCTIONS_PATH = resolve(TOOLS_PROJECT_ROOT, "data/user/instructions.md");
+const USER_SKILLS_DIR = resolve(TOOLS_PROJECT_ROOT, "data/user/skills");
+const USER_CUSTOM_TOOLS_DIR = resolve(TOOLS_PROJECT_ROOT, "data/user/custom-tools");
+
+const BASE_WRITE_REDIRECTS: Array<{ base: string; redirect: string; kind: "file" | "dir" }> = [
+  { base: configPaths.agentInstructions, redirect: USER_INSTRUCTIONS_PATH, kind: "file" },
+  { base: configPaths.skillsDir, redirect: USER_SKILLS_DIR, kind: "dir" },
+  { base: configPaths.customToolsDir, redirect: USER_CUSTOM_TOOLS_DIR, kind: "dir" },
+];
+
+function checkBaseWriteGuard(filePath: string): { allowed: true } | { allowed: false; reason: string } {
+  for (const { base, redirect, kind } of BASE_WRITE_REDIRECTS) {
+    const hit = kind === "file"
+      ? filePath === base
+      : filePath === base || filePath.startsWith(base + "/");
+    if (hit) {
+      const suggestion = kind === "file"
+        ? redirect
+        : filePath.replace(base, redirect);
+      return {
+        allowed: false,
+        reason:
+          `"${filePath}" is inside the read-only framework base and cannot be written directly. ` +
+          `Write user-authored content to "${suggestion}" instead. ` +
+          `Create the parent directory if it doesn't exist. ` +
+          `This split keeps framework updates clean from user customization — see the "User customization layout" section of the system prompt.`,
+      };
+    }
+  }
+  return { allowed: true };
 }
 
 // ── Shell tool ──────────────────────────────────────────────────────────
@@ -145,6 +188,9 @@ function createWriteTool(cwd: string, perms: Permissions): AgentTool<typeof writ
       const check = checkPathPermission(filePath, "write", cwd, perms);
       if (!check.allowed) return denied(check.reason!);
 
+      const guard = checkBaseWriteGuard(filePath);
+      if (!guard.allowed) return denied(guard.reason);
+
       try {
         // Backup config files before overwriting
         if (filePath === configPaths.agentInstructions || filePath === configPaths.permissions) {
@@ -249,6 +295,93 @@ export interface PocketHookResponse {
   run_on?: "server" | "device";
 }
 
+// ── Respond URL sanitization ────────────────────────────────────────────
+//
+// The iOS device can't reach localhost / 127.0.0.1 on the Mac. Any URL the
+// agent emits must be reachable externally (typically via a Tailscale or
+// similar tunnel). Rather than relying on a prompt rule for this, we
+// post-process every respond call:
+//
+//   1. Scan msg and url for localhost URLs.
+//   2. If a managed server is listening on that port with an active tunnel,
+//      rewrite the URL to the tunnel URL.
+//   3. Otherwise, log a warning so the behavior is visible — the agent has
+//      given the user something unreachable.
+//
+// If msg contains a rewritten URL and the step has no explicit url field,
+// the first rewritten URL is also surfaced on the url field so it renders
+// as a clickable link on the device.
+
+const LOCALHOST_URL_RE = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1)(?::(\d+))?(\/[^\s<>")]*)?/gi;
+
+function buildPortToTunnelMap(): Map<number, string> {
+  const map = new Map<number, string>();
+  try {
+    const servers = listServers();
+    for (const server of servers) {
+      if (server.tunnelUrl && typeof server.port === "number") {
+        map.set(server.port, server.tunnelUrl);
+      }
+    }
+  } catch (err: any) {
+    logger.warn(`Could not enumerate tunnels for URL sanitization: ${err.message}`);
+  }
+  return map;
+}
+
+function rewriteLocalhostUrls(
+  text: string,
+  tunnels: Map<number, string>,
+): { text: string; rewrites: number; leaks: number; firstRewritten: string | null } {
+  let rewrites = 0;
+  let leaks = 0;
+  let firstRewritten: string | null = null;
+
+  const replaced = text.replace(LOCALHOST_URL_RE, (match, portStr: string | undefined, pathStr: string | undefined) => {
+    const port = portStr ? parseInt(portStr, 10) : NaN;
+    const tunnelBase = Number.isFinite(port) ? tunnels.get(port) : undefined;
+    if (tunnelBase) {
+      rewrites++;
+      const rewritten = tunnelBase.replace(/\/$/, "") + (pathStr ?? "");
+      if (!firstRewritten) firstRewritten = rewritten;
+      return rewritten;
+    }
+    leaks++;
+    return match;
+  });
+
+  return { text: replaced, rewrites, leaks, firstRewritten };
+}
+
+function sanitizeResponseStep(step: PocketHookResponse, tunnels: Map<number, string>): PocketHookResponse {
+  const msgResult = rewriteLocalhostUrls(step.msg ?? "", tunnels);
+
+  let url = step.url;
+  let urlRewriteCount = 0;
+  let urlLeakCount = 0;
+  if (url) {
+    const r = rewriteLocalhostUrls(url, tunnels);
+    url = r.text;
+    urlRewriteCount = r.rewrites;
+    urlLeakCount = r.leaks;
+  } else if (msgResult.firstRewritten) {
+    // No explicit url field but msg had a rewritten localhost URL — surface
+    // it on the url field so PocketHook renders it as a clickable link.
+    url = msgResult.firstRewritten;
+  }
+
+  const totalLeaks = msgResult.leaks + urlLeakCount;
+  const totalRewrites = msgResult.rewrites + urlRewriteCount;
+  if (totalLeaks > 0) {
+    logger.warn(`respond: ${totalLeaks} localhost URL(s) emitted with no matching tunnel — iOS device cannot reach them. Start the server with tunnel: true to make it externally accessible.`);
+  }
+  if (totalRewrites > 0) {
+    logger.info(`respond: rewrote ${totalRewrites} localhost URL(s) to tunnel URL(s)`);
+  }
+
+  return { ...step, msg: msgResult.text, url };
+}
+
 export function createRespondTool(
   onRespond: (responses: PocketHookResponse[]) => void,
 ): AgentTool<typeof respondSchema> {
@@ -258,18 +391,106 @@ export function createRespondTool(
     description: `Send the final response to the user's PocketHook iOS app. You MUST call this tool to deliver your response. Each step can include a message and optionally trigger an iOS Shortcut by name. Use multiple steps for sequential automations.`,
     parameters: respondSchema,
     async execute(_id, params) {
-      const responses: PocketHookResponse[] = params.steps.map((step) => ({
+      const tunnels = buildPortToTunnelMap();
+      const responses: PocketHookResponse[] = params.steps.map((step) => sanitizeResponseStep({
         msg: step.msg,
         shortcut: step.shortcut,
         data: step.data as Record<string, unknown> | Record<string, unknown>[] | undefined,
         url: step.url,
         run_on: step.run_on,
-      }));
+      }, tunnels));
       onRespond(responses);
       return {
         content: [{ type: "text", text: `Response sent (${responses.length} step${responses.length > 1 ? "s" : ""})` }],
         details: { steps: responses.length },
       };
+    },
+  };
+}
+
+// ── run_code_job (compound tool) ─────────────────────────────────────────
+//
+// Encapsulates the "respond ack + create shell job running claude --print"
+// pattern so the agent only has to make one decision ("is this a
+// programming task?") instead of orchestrating two tool calls. The handler
+// composes the shell command, creates the job, and emits the
+// user-facing ack via the shared respond callback.
+
+const runCodeJobSchema = Type.Object({
+  task: Type.String({ description: "What Claude Code should do. Written in natural language. Include success criteria (e.g., 'create a Bun + Hono API with GET /health, install deps, verify it compiles')." }),
+  project_dir: Type.Optional(Type.String({ description: "Project directory for the work. Accepts an absolute path or a path relative to the workspace/ directory. Default: workspace/." })),
+  timeout: Type.Optional(Type.String({ description: "Max runtime for the job. Use interval format: '30m' (default) for typical tasks, '1h' for heavy ones, '15m' for short ones." })),
+  ack_message: Type.Optional(Type.String({ description: "Short user-facing ack sent immediately (same language as the user). Default: 'On it — I'll let you know when it's done.'" })),
+});
+
+function shellEscapeSingleQuoted(value: string): string {
+  // Wrap a value in single quotes, handling any embedded single quotes via
+  // close-quote / escaped-quote / reopen-quote (the standard POSIX trick).
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+export function createRunCodeJobTool(
+  cwd: string,
+  onRespond?: (responses: PocketHookResponse[]) => void,
+): AgentTool<typeof runCodeJobSchema> {
+  return {
+    name: "run_code_job",
+    label: "Run programming task via Claude Code",
+    description: "Run any programming task (create project, review code, debug, build, tests, refactor) as a Claude Code background job. Use this INSTEAD of calling shell/read/write directly for code work — PocketHook's HTTP request has a short timeout, so heavy work must go to a background job. This tool handles the respond ack + job creation in one call. Do NOT use for single simple reads (e.g., 'show me file X') — use the `read` tool for that. If you are already running inside a background job (your message starts with [BACKGROUND JOB]), do NOT call this; do the work directly.",
+    parameters: runCodeJobSchema,
+    async execute(_id, params) {
+      try {
+        const defaultAck = "On it — I'll let you know when it's done.";
+        const ackMessage = (params.ack_message ?? defaultAck).trim() || defaultAck;
+        const timeout = params.timeout ?? "30m";
+
+        const workspaceRoot = resolve(cwd, "workspace");
+        const targetDir = params.project_dir
+          ? resolve(workspaceRoot, params.project_dir)
+          : workspaceRoot;
+
+        const promptArg = shellEscapeSingleQuoted(
+          `${params.task}\n\nIMPORTANT: Always use non-interactive flags (--yes, -y, --defaults, --no-interactive) in all CLI commands. You cannot respond to interactive prompts.`,
+        );
+        const dirArg = shellEscapeSingleQuoted(targetDir);
+        const shellCommand = `cd ${dirArg} && claude -p --dangerously-skip-permissions ${promptArg}`;
+
+        const jobName = params.task.length > 60 ? params.task.slice(0, 57) + "..." : params.task;
+
+        const job = createJob({
+          name: jobName,
+          type: "once",
+          schedule: undefined,
+          prompt: shellCommand,
+          execution_type: "shell",
+          delay: undefined,
+          timeout,
+          silent: undefined,
+          on_complete_shortcut: undefined,
+          on_complete_data: undefined,
+        });
+
+        // Emit the user-facing ack directly if the respond callback is wired.
+        // When run_code_job is called from a flow that doesn't have a
+        // respond channel (e.g., unit tests), the agent can still call
+        // respond manually using the message in the returned text.
+        if (onRespond) {
+          onRespond([{ msg: ackMessage }]);
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: `Job #${job.id} "${jobName}" created (once/shell, timeout ${timeout}). Ack "${ackMessage}" ${onRespond ? "sent to user" : "(no respond channel — call respond manually)"}. Do NOT call respond again for this task; the user will receive the result when the job completes.`,
+          }],
+          details: { jobId: job.id, ackMessage, targetDir },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error creating code job: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
     },
   };
 }
@@ -532,11 +753,29 @@ function createStartServerTool(cwd: string, perms: Permissions): AgentTool<typeo
   return {
     name: "start_server",
     label: "Start a dev server",
-    description: "Start a long-running dev server for a workspace project. The server runs in the background and can optionally be exposed via HTTPS tunnel. Use $PORT in the command as a placeholder for the assigned port.",
+    description: "Start a long-running dev server for a workspace project. The server runs in the background and can optionally be exposed via HTTPS tunnel so the user can reach it from their iOS device. Use $PORT in the command as a placeholder for the assigned port. Set tunnel: true whenever the user will actually open the URL on their phone — localhost URLs are unreachable from the device and are returned as errors.",
     parameters: startServerSchema,
     async execute(_id, params) {
       const check = checkShellPermission(params.command, perms);
       if (!check.allowed) return denied(check.reason!);
+
+      // Pre-flight: if tunnel is requested, make sure at least one tunnel
+      // tool is installed before spawning the server. Failing fast avoids
+      // leaving an unreachable localhost process behind.
+      if (params.tunnel) {
+        const tunnels = getAvailableTunnels();
+        const anyAvailable = tunnels.some((t) => t.available);
+        if (!anyAvailable) {
+          const names = tunnels.map((t) => t.name).join(", ");
+          return {
+            content: [{
+              type: "text",
+              text: `tunnel: true was requested but no tunnel tool is installed (${names}). Install Tailscale (recommended on macOS) or start the server with tunnel: false if it only needs local access. iOS devices cannot reach localhost URLs directly.`,
+            }],
+            details: { error: "no_tunnel_available", tunnels },
+          };
+        }
+      }
 
       try {
         const resolvedCwd = resolve(cwd, params.cwd);
@@ -548,14 +787,33 @@ function createStartServerTool(cwd: string, perms: Permissions): AgentTool<typeo
           tunnel: params.tunnel,
         });
 
+        // If tunnel was requested but setup failed post-spawn, stop the
+        // orphan server and surface the error. Without this, the agent
+        // silently gets a localhost-only server it would then leak to the
+        // device.
+        if (params.tunnel && !entry.tunnelUrl) {
+          stopServer(entry.id);
+          return {
+            content: [{
+              type: "text",
+              text: `Server "${params.name}" started on port ${entry.port} but tunnel setup failed. The server has been stopped. Check that Tailscale Serve is available and retry, or call start_server with tunnel: false if local-only access is acceptable.`,
+            }],
+            details: { error: "tunnel_setup_failed", port: entry.port },
+          };
+        }
+
+        const primaryUrl = entry.tunnelUrl ?? `http://localhost:${entry.port}`;
         let msg = `Server "${entry.name}" started (ID #${entry.id}, port ${entry.port}, PID ${entry.pid}).`;
-        msg += `\nLocal: http://localhost:${entry.port}`;
+        msg += `\nURL: ${primaryUrl}`;
         if (entry.tunnelUrl) {
-          msg += `\nPublic: ${entry.tunnelUrl}`;
+          msg += `\nLocal (host-only): http://localhost:${entry.port}`;
+          msg += `\nThis URL is reachable from the user's iOS device — use it in the respond url field.`;
+        } else {
+          msg += `\nNOTE: This URL is only reachable from the host machine. Do NOT send it to the user's iOS device — it won't resolve. Restart with tunnel: true if the user needs to view the project on their phone.`;
         }
         return {
           content: [{ type: "text", text: msg }],
-          details: { id: entry.id, port: entry.port, tunnelUrl: entry.tunnelUrl },
+          details: { id: entry.id, port: entry.port, tunnelUrl: entry.tunnelUrl, primaryUrl },
         };
       } catch (err: any) {
         return {
@@ -832,6 +1090,8 @@ function createUpdateStatusTool(): AgentTool<typeof updateStatusSchema> {
 
 const completeProjectSchema = Type.Object({
   project_description: Type.String({ description: "A short description identifying the specific project to close (e.g., 'trip to Japan June 2026', 'writing scifi novel', 'blog redesign'). Semantic similarity is used to find only the vectors related to THIS project, leaving other concurrent projects untouched." }),
+  project_slug: Type.Optional(Type.String({ description: "Slug identifying this project's predicates in the knowledge graph (e.g., 'visit_barcelona', 'scifi_novel', 'blog_redesign'). When provided, the handler automatically invalidates every active triple whose predicate contains this slug (e.g., 'scheduled_visit_barcelona', 'planning_visit_barcelona', 'confirmed_visit_barcelona') AND records a single cancellation/completion triple. This replaces the old two-step pattern of calling complete_project then remember_fact — a single call does both." })),
+  reason: Type.Optional(Type.Union([Type.Literal("cancelled"), Type.Literal("completed")], { description: "Why the project is closing. Defaults to 'completed'. Combined with project_slug to form the new triple predicate, e.g. reason='cancelled' + slug='visit_barcelona' → ('user','cancelled_visit_barcelona',<today>)." })),
   hall: Type.Optional(Type.String({ description: "Optional hall filter to narrow the scope (e.g., 'travel', 'work'). Default: no filter, scans all project-status vectors." })),
   threshold: Type.Optional(Type.Number({ description: "Similarity threshold 0-1 (default 0.55). Higher = stricter matching. Only vectors above this threshold are affected." })),
 });
@@ -840,18 +1100,47 @@ function createCompleteProjectTool(): AgentTool<typeof completeProjectSchema> {
   return {
     name: "complete_project",
     label: "Complete or cancel a project (PARA)",
-    description: "Close a specific project using PARA-style transition. Uses semantic similarity on a project description so only the relevant project is affected — NOT every project in the same hall. Events/decisions/requests related to the project are archived, while reference material (lists, recommendations, how-tos) is preserved as 'resource'. Call this when the user cancels or completes a project. Provide a precise description that identifies THIS project uniquely (include destination, topic, dates, or project name).",
+    description: "Close a specific project in one call. (1) Uses semantic similarity on project_description to archive related events/decisions/requests while keeping reference material as 'resource'. (2) If project_slug is provided, ALSO invalidates all active knowledge-graph triples whose predicate contains that slug, and records a single cancellation/completion triple — so you no longer need a separate remember_fact call. Use this whenever the user cancels, abandons, or completes a plan. Provide a precise project_description that identifies THIS project uniquely.",
     parameters: completeProjectSchema,
     async execute(_id, params) {
       try {
         const { completeProject } = await import("./vector-memory.js");
-        const result = await completeProject(params.project_description, {
+        const { invalidateTriplesByProjectSlug, addTriple } = await import("./knowledge-graph.js");
+
+        const vectorResult = await completeProject(params.project_description, {
           hall: params.hall,
           threshold: params.threshold,
         });
+
+        let invalidatedTriples = 0;
+        let recordedPredicate: string | null = null;
+
+        if (params.project_slug) {
+          const slug = params.project_slug.trim();
+          if (slug) {
+            invalidatedTriples = invalidateTriplesByProjectSlug(slug, "user");
+
+            const reason = params.reason ?? "completed";
+            recordedPredicate = `${reason}_${slug}`;
+            const today = new Date().toISOString().slice(0, 10);
+            addTriple("user", recordedPredicate, today);
+          }
+        }
+
+        const parts = [
+          `Project "${params.project_description}" closed: scanned ${vectorResult.scanned} project vectors, ${vectorResult.archived} archived, ${vectorResult.keptAsResource} kept as resource.`,
+        ];
+        if (params.project_slug) {
+          parts.push(`Knowledge graph: invalidated ${invalidatedTriples} triple(s) matching slug "${params.project_slug}"; recorded ("user", "${recordedPredicate}", today).`);
+        }
+
         return {
-          content: [{ type: "text", text: `Project "${params.project_description}" closed: scanned ${result.scanned} project vectors, ${result.archived} archived, ${result.keptAsResource} kept as resource.` }],
-          details: result,
+          content: [{ type: "text", text: parts.join(" ") }],
+          details: {
+            ...vectorResult,
+            invalidatedTriples,
+            recordedPredicate,
+          },
         };
       } catch (err: any) {
         return {

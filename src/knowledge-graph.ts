@@ -167,6 +167,49 @@ export function invalidateTriple(id: number): boolean {
 }
 
 /**
+ * Invalidate every active triple tied to a project slug. Used by the
+ * `complete_project` cascade to close out all planning-related facts when a
+ * project ends.
+ *
+ * A predicate is considered tied to the slug when it matches one of:
+ *   - the slug exactly (e.g., predicate === "visit_barcelona")
+ *   - the slug as a suffix preceded by an underscore (e.g.,
+ *     "scheduled_visit_barcelona", "planning_visit_barcelona",
+ *     "confirmed_visit_barcelona")
+ *
+ * This intentionally does NOT match substrings — `visit_barcelona` will
+ * not invalidate triples for a separate `revisit_barcelona` project. The
+ * slug may itself contain underscores (most do, e.g. `visit_barcelona`).
+ *
+ * Optionally restrict by subject (typically "user"). Returns the number of
+ * triples invalidated.
+ */
+export function invalidateTriplesByProjectSlug(
+  slug: string,
+  subject?: string,
+): number {
+  const trimmed = slug.trim();
+  if (!trimmed) return 0;
+
+  const d = getDb();
+  // Escape SQL LIKE metacharacters so the slug matches literally even when
+  // it contains underscores (common) or, theoretically, percent signs.
+  const escaped = trimmed.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+
+  let sql = `UPDATE knowledge_triples
+             SET valid_until = ?
+             WHERE valid_until IS NULL
+               AND (predicate = ? OR predicate LIKE ? ESCAPE '\\')`;
+  const params: (string | number)[] = [Date.now(), trimmed, `%\\_${escaped}`];
+  if (subject) {
+    sql += " AND subject = ?";
+    params.push(subject);
+  }
+  const result = d.run(sql, params);
+  return result.changes;
+}
+
+/**
  * Search triples by keyword across subject, predicate, and object.
  * Returns currently valid triples matching the query.
  */

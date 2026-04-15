@@ -16,6 +16,7 @@ import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CUSTOM_TOOLS_DIR = join(PROJECT_ROOT, "custom-tools");
+const USER_CUSTOM_TOOLS_DIR = join(PROJECT_ROOT, "data", "user", "custom-tools");
 
 const MAX_OUTPUT = 50_000;
 
@@ -105,15 +106,17 @@ let cachedDefs: CustomToolDef[] = [];
 let cachedMtime: number = 0;
 
 function getMaxMtime(): number {
-  if (!existsSync(CUSTOM_TOOLS_DIR)) return 0;
   let maxMtime = 0;
-  try {
-    const files = readdirSync(CUSTOM_TOOLS_DIR).filter((f) => f.endsWith(".md") && !f.startsWith("_"));
-    for (const file of files) {
-      const mtime = statSync(join(CUSTOM_TOOLS_DIR, file)).mtimeMs;
-      if (mtime > maxMtime) maxMtime = mtime;
-    }
-  } catch {}
+  for (const dir of [CUSTOM_TOOLS_DIR, USER_CUSTOM_TOOLS_DIR]) {
+    if (!existsSync(dir)) continue;
+    try {
+      const files = readdirSync(dir).filter((f) => f.endsWith(".md") && !f.startsWith("_"));
+      for (const file of files) {
+        const mtime = statSync(join(dir, file)).mtimeMs;
+        if (mtime > maxMtime) maxMtime = mtime;
+      }
+    } catch {}
+  }
   return maxMtime;
 }
 
@@ -123,26 +126,30 @@ export function loadCustomToolDefs(): CustomToolDef[] {
     return cachedDefs;
   }
 
-  if (!existsSync(CUSTOM_TOOLS_DIR)) return [];
+  // Load base first, then user so user overrides base on toolName collision.
+  const byToolName = new Map<string, CustomToolDef>();
+  for (const dir of [CUSTOM_TOOLS_DIR, USER_CUSTOM_TOOLS_DIR]) {
+    if (!existsSync(dir)) continue;
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith(".md") && !f.startsWith("_"))
+      .sort();
 
-  const files = readdirSync(CUSTOM_TOOLS_DIR)
-    .filter((f) => f.endsWith(".md") && !f.startsWith("_"))
-    .sort();
-
-  const defs: CustomToolDef[] = [];
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(CUSTOM_TOOLS_DIR, file), "utf-8");
-      const def = parseCustomTool(content, file);
-      if (def) {
-        defs.push(def);
-      } else {
-        logger.warn(`Could not parse custom tool: ${file}`);
+    for (const file of files) {
+      try {
+        const content = readFileSync(join(dir, file), "utf-8");
+        const def = parseCustomTool(content, file);
+        if (def) {
+          byToolName.set(def.toolName, def);
+        } else {
+          logger.warn(`Could not parse custom tool: ${file} (in ${dir})`);
+        }
+      } catch (err) {
+        logger.warn(`Error reading custom tool ${file}: ${err instanceof Error ? err.message : err}`);
       }
-    } catch (err) {
-      logger.warn(`Error reading custom tool ${file}: ${err instanceof Error ? err.message : err}`);
     }
   }
+
+  const defs = [...byToolName.values()];
 
   if (currentMtime !== cachedMtime && defs.length > 0) {
     logger.info(`Custom tools reloaded (${defs.length} tool(s))`);
@@ -285,4 +292,4 @@ export function getCustomToolsPrompt(): string {
   return "\n\n## Custom Tools\n\nThese tools were added by the user or by you. They are available for use:\n\n" + lines.join("\n");
 }
 
-export { CUSTOM_TOOLS_DIR };
+export { CUSTOM_TOOLS_DIR, USER_CUSTOM_TOOLS_DIR };

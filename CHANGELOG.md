@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.0 — 2026-04-15
+
+### Breaking / behavior changes
+
+- **User customization overlay** — Framework files (`skills/`, `custom-tools/`, `agent-instructions.md`) are now read-only for the agent. Per-deployment customization lives under `data/user/` (`skills/`, `custom-tools/`, `instructions.md`, `prefs.json`). The runtime scans both layers and the user layer wins on filename / tool-name collision. The `write` tool rejects any path into the base and redirects the agent to `data/user/*`. Framework updates land cleanly without overwriting user data
+- **`complete_project` cascade** — Added optional `project_slug` and `reason` (`"cancelled"` | `"completed"`). When provided, the handler invalidates every active triple whose predicate is the slug exactly or ends in `_<slug>` (e.g., `scheduled_visit_barcelona`, `planning_visit_barcelona`) and records a single completion triple — one call replaces the old three-step pattern (`complete_project` → `remember_fact` → `respond`). Matching is boundary-aware: `visit_barcelona` does NOT invalidate `revisit_barcelona`
+- **System prompt adelgazado** — `buildBaseSystemPrompt` reduced from ~400 to ~100 lines. Long procedural sections moved to loadable docs under `docs/` (content rendering, skills format, custom tools format, dashboard, serving projects, memory guide). `agent-instructions.md` rewritten to cover only universal rules; Hugo-specific rules removed (the underlying intent is now covered by the `start_server` tunnel contract and the `respond` URL sanitizer)
+
+### Features
+
+- **`run_code_job` meta-tool** — A single call creates a Claude Code background job AND sends the user the ack message. Internally composes the `claude -p --dangerously-skip-permissions` invocation, picks a sensible default timeout, escapes the task prompt, and emits `respond` through the same channel used by the `respond` tool. Replaces the error-prone respond-then-create_job pattern for programming tasks
+- **`respond` URL sanitizer** — Post-processes every `msg` and `url` field, rewrites `localhost` / `127.0.0.1` URLs to the tunnel URL when a managed server has one, and logs a warning when it can't — so the iOS device never receives a link it can't reach. If the agent leaves a rewritten URL in `msg` with no `url` set, the first rewritten URL is surfaced on the `url` field so it renders as a clickable link
+- **`start_server` tunnel contract** — `tunnel: true` is now enforced pre-flight: if no tunnel tool is installed (Tailscale / ngrok / cloudflared), the tool refuses to start. If tunnel setup fails after spawn, the orphan server is stopped and the agent receives a clear error. When tunnel is up, the tunnel URL is returned as the primary URL with an explicit note that the local URL is host-only
+- **Typed user prefs** — `data/user/prefs.json` holds arbitrary JSON values (scalars, nested objects). Skills reference keys as `{{prefs.routeOrigin}}` or `{{prefs.tunnel.domain}}`; the server substitutes them when the skill is loaded. Unknown keys are left untouched so typos stay visible
+- **User instructions** — `data/user/instructions.md` is concatenated into the system prompt after `agent-instructions.md`. Global rules the user wants always applied ("always respond in English", "never use tables") live here and survive framework updates
+- **`invalidateTriplesByProjectSlug` primitive** — New helper in `knowledge-graph.ts` does safe boundary-matching (exact or `_slug` suffix) instead of substring matching
+
+### Docs
+
+- New loadable guides under `docs/`: `content-rendering.md`, `skills-format.md`, `custom-tools-format.md`, `dashboard.md`, `serving-projects.md`, `memory-guide.md`
+- Skills index now loads from both `skills/` and `data/user/skills/`
+- `skills/_example-route-planner.md` added as a neutral template showing how to reference `{{prefs.*}}`
+
+### Tests
+
+- `tests/knowledge-graph.test.ts` — covers slug cascade invalidation, exact-match, suffix-match, boundary safety, subject filter, empty-slug no-op
+- `tests/user-customization.test.ts` — covers `{{prefs.*}}` top-level and nested substitution, unknown-key pass-through, and system-prompt references to the user layer
+
 ## 0.3.0 — 2026-04-14
 
 ### Features
