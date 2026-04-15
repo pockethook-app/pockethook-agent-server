@@ -30,19 +30,66 @@ export function getProviderInfo(): { provider: EmbeddingProvider; baseUrl: strin
   return { provider, baseUrl, model };
 }
 
+// Chunk size in chars — safely under nomic-embed-text's 2048-token context.
+// ~6000 chars ≈ ~1500 tokens, leaves headroom for tokenizer variance.
+const CHUNK_SIZE = 6_000;
+const CHUNK_OVERLAP = 500;
+
+/**
+ * Split text into overlapping chunks to fit within embedding model context.
+ */
+function chunkText(text: string): string[] {
+  if (text.length <= CHUNK_SIZE) return [text];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const end = Math.min(start + CHUNK_SIZE, text.length);
+    chunks.push(text.slice(start, end));
+    if (end === text.length) break;
+    start = end - CHUNK_OVERLAP;
+  }
+  return chunks;
+}
+
+/**
+ * Mean-pool multiple embeddings into one vector, then L2-normalize
+ * so cosine similarity stays comparable with single-chunk vectors.
+ */
+function meanPool(vectors: Float32Array[]): Float32Array {
+  const dim = vectors[0]!.length;
+  const out = new Float32Array(dim);
+  for (const v of vectors) {
+    for (let i = 0; i < dim; i++) out[i]! += v[i]!;
+  }
+  for (let i = 0; i < dim; i++) out[i]! /= vectors.length;
+  let mag = 0;
+  for (let i = 0; i < dim; i++) mag += out[i]! * out[i]!;
+  mag = Math.sqrt(mag);
+  if (mag > 0) {
+    for (let i = 0; i < dim; i++) out[i]! /= mag;
+  }
+  return out;
+}
+
+async function embedOne(text: string): Promise<Float32Array> {
+  if (provider === "ollama") return embedViaOllama(text);
+  return embedViaOpenAI(text);
+}
+
 /**
  * Get embedding vector for a text string.
- * Routes to the correct provider API automatically.
+ * Long inputs are chunked and mean-pooled to fit within the model's context.
  */
 export async function getEmbedding(text: string): Promise<Float32Array> {
-  // Truncate to ~24K chars (~8K tokens) as safety limit for most embedding models
-  const truncated = text.length > 24_000 ? text.slice(0, 24_000) : text;
-
-  if (provider === "ollama") {
-    return embedViaOllama(truncated);
+  const chunks = chunkText(text);
+  if (chunks.length === 1) {
+    return embedOne(chunks[0]!);
   }
-  // LM Studio and OpenAI both use the OpenAI-compatible /v1/embeddings endpoint
-  return embedViaOpenAI(truncated);
+  const vectors: Float32Array[] = [];
+  for (const chunk of chunks) {
+    vectors.push(await embedOne(chunk));
+  }
+  return meanPool(vectors);
 }
 
 /**
