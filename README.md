@@ -548,6 +548,10 @@ bun tsc --noEmit
 
 Tests cover permissions enforcement, job scheduling/recovery, rate limiting, and configuration loading. CI runs both on every push and pull request to `main` via GitHub Actions.
 
+## Contributing
+
+Issues welcome, pull requests not currently accepted. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 MIT

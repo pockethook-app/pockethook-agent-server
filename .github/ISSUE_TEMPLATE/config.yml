@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/pockethook-app/pockethook-agent-server#readme
+    about: Check the README first — setup, configuration, tools, and customization are all covered there.
+  - name: Contribution policy
+    url: https://github.com/pockethook-app/pockethook-agent-server/blob/main/CONTRIBUTING.md
+    about: Pull requests are not currently accepted. Issues are welcome.

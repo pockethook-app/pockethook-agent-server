@@ -1,0 +1,63 @@
+name: Bug report
+description: Report something that doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Please fill in what you can — the more specific, the faster it can be looked at.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what did you get instead?
+      placeholder: |
+        Expected: ...
+        Got: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A minimal sequence that triggers the problem.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "Paste relevant output from `bun run logs` or the server console. Redact secrets (tokens, handles, emails)."
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Server version
+      description: "From `package.json` or the `X-API-Version` response header."
+      placeholder: "0.5.0"
+    validations:
+      required: true
+
+  - type: input
+    id: provider
+    attributes:
+      label: LLM provider and model
+      placeholder: "anthropic / claude-sonnet-4"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Bun version
+      placeholder: "macOS 15.1, Bun 1.1.38"
+    validations:
+      required: true
