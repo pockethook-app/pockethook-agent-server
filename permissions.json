@@ -4,7 +4,11 @@
     "read",
     "write",
     "ls",
-    "create_job",
+    "create_project",
+    "list_projects",
+    "delete_project",
+    "create_once_job",
+    "create_cron_job",
     "list_jobs",
     "delete_job",
     "web_search",
@@ -16,9 +20,10 @@
     "remember_fact",
     "query_facts",
     "load_skill",
-    "load_doc",
     "update_memory_status",
-    "complete_project"
+    "complete_project",
+    "create_custom_tool",
+    "create_user_skill"
   ],
   "shell": {
     "blockedCommands": ["shutdown", "reboot", "halt", "mkfs", "dd", "passwd", "chown", "chmod"],

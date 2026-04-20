@@ -13,17 +13,18 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and mul
 - **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter, Ollama, LM Studio
 - **OAuth authentication** — GitHub Copilot and OpenAI Codex via device code / browser flow
 - **Agent tools** — Shell, file read/write, directory listing, background jobs, web search, web scraping, dev server management
-- **`run_code_job` meta-tool** — One call creates a Claude Code background job AND sends the user an immediate ack. Replaces the error-prone respond-then-create_job pattern for programming tasks
-- **Background jobs** — Schedule one-time or recurring tasks with cron expressions
-- **Dev server management** — Start, stop, and list dev servers for workspace projects with optional HTTPS tunnel exposure. `tunnel: true` is enforced: if no tunnel tool is installed or setup fails, the server refuses to start an unreachable localhost process
-- **Dynamic skills** — Define shortcuts and behavior rules as `.md` files with YAML frontmatter. Only a compact index is loaded into the prompt; full content is fetched on demand via the `load_skill` tool
-- **Server-side shortcuts** — Execute shortcuts on the Mac server instead of the iOS device via `shortcuts run` CLI. Ideal for iCloud-synced actions (notes, calendar, reminders). Configure per-skill with `target: mac` and optional `sync_app` for automatic iCloud sync
-- **User customization overlay** — Framework files (`skills/`, `custom-tools/`, `agent-instructions.md`) are read-only. Per-deployment customization lives under `data/user/` (skills, custom tools, instructions, typed prefs). Framework updates land cleanly without clobbering user data
+- **`run_code_job` meta-tool** — One call creates a Claude Code background job AND sends the user an immediate ack. Replaces the error-prone respond-then-create-job pattern for programming tasks
+- **Typed respond_* tools** — Six dedicated tools (`respond_text`, `respond_image`, `respond_buttons`, `respond_shortcut`, `respond_html`, `respond_sequence`) build the PocketHook protocol correctly by construction. Schemas reject URLs without image extensions, malformed button syntax, and other common mistakes before they reach the device
+- **Typed job tools** — `create_once_job` (one-off) and `create_cron_job` (recurring) with discriminated-union schemas for schedule and body; impossible to pass an invalid `type`/`schedule` combination
+- **Typed workspace tools** — `create_project`, `list_projects`, `delete_project`, plus name-only `project_name` parameters on `run_code_job` and `start_server`. The agent never constructs paths, so bugs like `workspace/workspace/foo` are structurally impossible
+- **Dev server management** — Start, stop, and list dev servers with optional HTTPS tunnel. `tunnel: true` is pre-flight checked: if no tunnel tool is installed or setup fails, the server refuses to start an unreachable localhost process
+- **Dynamic skills** — Define shortcuts and behavior rules as `.md` files with YAML frontmatter. Only a compact index is loaded into the prompt; full content is fetched on demand via `load_skill`
+- **Server-side shortcuts** — Execute shortcuts on the Mac server instead of the iOS device via `shortcuts run` CLI. Configure per-skill with `target: mac` and optional `sync_app` for automatic iCloud sync
+- **User customization overlay** — Framework files (`skills/`, `custom-tools/`, `config/`) are read-only. Per-deployment customization lives under `data/user/` (skills, custom tools, instructions, typed prefs). Framework updates land cleanly without clobbering user data
+- **Typed writer tools** — `create_user_skill` and `create_custom_tool` build the user-layer markdown with correct frontmatter/format, so the loader always parses them; the agent never hand-writes these files
 - **Typed user prefs with `{{prefs.*}}` interpolation** — Store values in `data/user/prefs.json`; reference them in skills as `{{prefs.routeOrigin}}` and the server substitutes on load
-- **Self-managing skills** — The agent can create, edit, and delete skill definitions (writes always go to the user layer)
-- **Agent instructions** — Editable `agent-instructions.md` (framework defaults) + `data/user/instructions.md` (user additions), both hot-reloaded
-- **Automatic URL sanitization** — The `respond` tool rewrites `localhost`/`127.0.0.1` URLs to the corresponding tunnel URL when a managed server has one, and logs a warning when it can't — so the iOS device never receives an unreachable link
-- **Loadable doc system** — Long procedural details (content rendering, skills format, custom tools format, dashboard, serving projects, memory guide) live in `docs/` and are fetched on demand via `load_doc`, keeping the base prompt compact
+- **Agent instructions** — Editable `config/agent-instructions.md` (framework defaults) + `data/user/instructions.md` (user additions), both hot-reloaded
+- **Automatic URL sanitization** — Every respond_* tool rewrites `localhost`/`127.0.0.1` URLs to the corresponding tunnel URL when a managed server has one, and logs a warning when it can't — the iOS device never receives an unreachable link
 - **Semantic memory** — Vector-based search with embeddings (Ollama, LM Studio, or OpenAI) stored in a separate `knowledge.db`. Memories are auto-classified into wing/room/hall/status dimensions by the LLM
 - **Knowledge graph** — Temporal triple store for durable facts with auto-invalidation. Multi-value relationships (children, friends) coexist; single-value facts (lives_in, partner) auto-replace
 - **PARA method** — Every memory is tagged with a status (Project, Area, Resource, Archive). Projects are closed with semantic similarity matching; reference material survives project closures
@@ -226,18 +227,20 @@ The runtime separates **framework files** (shipped with the repo, read-only for 
 
 ```
 pockethook-agent-server/
-├── skills/                 # framework-shipped skills (read-only)
-├── custom-tools/           # framework-shipped custom tool templates (read-only)
-├── agent-instructions.md   # framework agent instructions (read-only)
+├── skills/                      # framework-shipped skills (read-only)
+├── custom-tools/                # framework-shipped custom tool templates (read-only)
+├── config/
+│   ├── agent-instructions.md    # framework agent instructions (read-only)
+│   └── personality.md           # framework personality (read-only)
 └── data/
-    └── user/               # git-ignored, per deployment
-        ├── skills/         # user-authored skills (override base on filename)
-        ├── custom-tools/   # user-installed custom tools
-        ├── instructions.md # user additions to agent instructions
-        └── prefs.json      # typed user values, referenced as {{prefs.key}}
+    └── user/                    # git-ignored, per deployment
+        ├── skills/              # user-authored skills (override base on filename)
+        ├── custom-tools/        # user-installed custom tools
+        ├── instructions.md      # user additions to agent instructions
+        └── prefs.json           # typed user values, referenced as {{prefs.key}}
 ```
 
-The agent is told to write all new or edited content to `data/user/*`. The `write` tool enforces this at the code level: any attempt to write into `skills/`, `custom-tools/`, or `agent-instructions.md` is rejected with an error pointing at the correct user-layer path.
+User customization is written via dedicated typed tools (`create_user_skill`, `create_custom_tool`) so the resulting files always match the loader's format. Additionally, the `write` tool rejects any path under `skills/`, `custom-tools/`, or `config/` and redirects the agent to `data/user/*` — so even direct file edits end up in the user layer.
 
 ### Typed preferences
 
@@ -261,7 +264,7 @@ Don't edit `skills/route-planner.md`, `skills/calendar-actions.md`, etc. in plac
 
 Skills are `.md` files that define iOS Shortcuts the agent can trigger and/or behavior rules for the agent to follow. They use **dynamic loading**: only a compact index (title, description, shortcut list) is injected into the system prompt. The agent loads the full content on demand via the `load_skill` tool, keeping token usage low as you add more skills.
 
-The runtime scans both `skills/` and `data/user/skills/`; user-authored skills override base on filename collision. See [docs/skills-format.md](docs/skills-format.md) for the full authoring reference.
+The runtime scans both `skills/` and `data/user/skills/`; user-authored skills override base on filename collision. Use the `create_user_skill` tool to add new skills — it builds the frontmatter correctly. If you want to edit a user-layer skill by hand, the format is: YAML frontmatter (`title`, `description`, `shortcuts: []`, optional `target`/`sync_app`) + Markdown body.
 
 Each skill file should start with YAML frontmatter:
 
@@ -310,7 +313,7 @@ The agent can create and manage skills when asked by the user. See `skills/_exam
 
 ## Personality
 
-Configure the agent's tone and emoji usage via `bun run personality` or by editing `personality.md` directly (hot-reloaded on next request).
+Configure the agent's tone and emoji usage via `bun run personality` or by editing `config/personality.md` directly (hot-reloaded on next request).
 
 Four built-in presets:
 
@@ -327,7 +330,7 @@ You can also choose **Custom** to write your own personality description. Emoji 
 
 Two layers, both hot-reloaded:
 
-- `agent-instructions.md` (project root) — framework defaults. Read-only for the agent; edit directly if you're customizing your own deployment but note that framework updates may overwrite it.
+- `config/agent-instructions.md` — framework defaults. Read-only for the agent; edit directly if you're customizing your own deployment but note that framework updates may overwrite it.
 - `data/user/instructions.md` — user-specific additions. Anything the user asks the agent to apply globally ("always answer in English", "never use tables", "prefer concise responses") is appended here by the agent. Survives framework updates.
 
 Both files are concatenated into the system prompt. No restart needed.
@@ -365,17 +368,21 @@ Completed results are delivered **instantly without LLM processing** — stored 
 
 ### Agent tools
 
-The agent has three job management tools: `create_job`, `list_jobs`, `delete_job`.
+The agent has four job management tools: `create_once_job`, `create_cron_job`, `list_jobs`, `delete_job`.
+
+- `create_once_job({ name, body: { kind: "shell" | "prompt", ... }, delay?, timeout?, silent?, on_complete_shortcut?, on_complete_data? })` — run once.
+- `create_cron_job({ name, schedule: { kind: "interval", value } | { kind: "cron", expression }, body, timeout?, silent? })` — run on a schedule.
+
+The `body` is a discriminated union (`{ kind: "shell", command }` or `{ kind: "prompt", prompt }`) so it's impossible to mix the two by accident.
 
 ### `run_code_job` (programming tasks)
 
-For any programming task (create project, audit code, debug, build, test, refactor), the agent uses `run_code_job` instead of `create_job` directly. The meta-tool:
+For any programming task (create project, audit code, debug, build, test, refactor), the agent uses `run_code_job` instead of `create_once_job` directly. The meta-tool:
 
-1. Composes the `claude --print --dangerously-skip-permissions` invocation with the right working directory and escaping.
-2. Creates a shell `once` job with a sensible default timeout (`30m`).
-3. Emits the user-facing ack immediately through the same `respond` channel — the user doesn't wait for the LLM to orchestrate two calls.
+1. Creates a `prompt`-type job with the configured model as the runner.
+2. Emits the user-facing ack immediately through the same respond channel — the user doesn't wait for the LLM to orchestrate two calls.
 
-Parameters: `task` (required), `project_dir` (optional, relative to `workspace/` or absolute), `timeout` (optional, default `30m`), `ack_message` (optional). See [docs/memory-guide.md](docs/memory-guide.md) and [skills/claude-code.md](skills/claude-code.md) for context on how the job runs.
+Parameters: `task` (required), `project_name` (optional; just a name, the tool resolves the path — **never pass a path**), `timeout` (optional, default `30m`), `ack_message` (optional).
 
 ### Web tools
 
@@ -399,39 +406,34 @@ Server tools: `start_server`, `stop_server`, `list_servers`. State is persisted 
 
 The agent can install CLI tools and register them as new agent tools — extending its own capabilities without modifying the server code.
 
-When a user says *"install Playwright and take screenshots for me"*, the agent:
-1. Installs the dependency (`bun add playwright`)
-2. Creates a tool definition in `custom-tools/` (e.g., `web-screenshot.md`)
-3. The tool is available on the next request (hot-reloaded)
+When a user says *"install Playwright and take screenshots for me"*, the agent calls `create_custom_tool` with typed arguments:
 
-Tool definitions are `.md` files with a simple format:
-
-```markdown
-### Web Screenshot
-
-Tool name: `web_screenshot`
-
-Take a screenshot of a web page using Playwright.
-
-Install: `bun add playwright && bunx playwright install chromium`
-
-Command: `bunx playwright screenshot $url $output`
-
-Parameters:
-- url (string, required): URL to screenshot
-- output (string, optional): Output file path. Default: workspace/screenshot.png
+```js
+create_custom_tool({
+  name: "web_screenshot",
+  display_name: "Web Screenshot",
+  description: "Take a screenshot of a web page using Playwright.",
+  install: "bun add playwright && bunx playwright install chromium",
+  command: "bunx playwright screenshot $url $output",
+  parameters: [
+    { name: "url",    type: "string", required: true,  description: "URL to screenshot" },
+    { name: "output", type: "string", required: false, description: "Output file path", default: "workspace/screenshot.png" }
+  ]
+})
 ```
 
-Custom tools follow the same hot-reload pattern as skills. The agent can create, edit, and delete them. Dependencies are installed automatically on first use.
+The tool is written to `data/user/custom-tools/web_screenshot.md` in the exact markdown format the loader expects, and is available on the next request (hot-reloaded). The agent never hand-writes these files — the typed schema plus the writer tool make it impossible to get the format wrong.
+
+You can also author custom tools by hand by placing markdown files in `data/user/custom-tools/` following the same `### Display Name` / `Tool name:` / `Command:` / `Parameters:` structure used by `custom-tools/_example.md`.
 
 ## Permissions
 
 Granular tool permissions are stored in `permissions.json` (configure via `bun run permissions` or `bun run setup`):
 
-- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`, `start_server`, `stop_server`, `list_servers`, `search_memory`, `remember_fact`, `query_facts`, `load_skill`, `load_doc`, `update_memory_status`, `complete_project`
-- **Always-on tools** (not gated by `permissions.json`): `respond`, `run_code_job` — both wired to the same response channel so they cannot be missing
+- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_project`, `list_projects`, `delete_project`, `create_once_job`, `create_cron_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`, `start_server`, `stop_server`, `list_servers`, `search_memory`, `remember_fact`, `query_facts`, `load_skill`, `update_memory_status`, `complete_project`, `create_custom_tool`, `create_user_skill`
+- **Always-on tools** (not gated by `permissions.json`): `respond_text`, `respond_image`, `respond_buttons`, `respond_shortcut`, `respond_html`, `respond_sequence`, `run_code_job` — all wired to the same response channel so they cannot be missing
 - **Working directory boundary** — Prevents the agent from escaping `WORKING_DIR`
-- **Base-path write guard** — The `write` tool rejects any path under `skills/`, `custom-tools/`, or `agent-instructions.md` and redirects the agent to `data/user/*`
+- **Base-path write guard** — The `write` tool rejects any path under `skills/`, `custom-tools/`, or `config/agent-instructions.md` and redirects the agent to `data/user/*`
 - **Blocked shell commands** — e.g., `sudo`, `rm -rf /`, `shutdown`
 - **Blocked shell patterns** — Regex patterns like `curl.*\|.*sh`
 - **Blocked filesystem paths** — e.g., `.env`, `.git`
@@ -442,7 +444,7 @@ Granular tool permissions are stored in `permissions.json` (configure via `bun r
 All user data is versioned automatically for safety — no changes are ever lost:
 
 - **Workspace files** — Tracked with a local git repo inside `workspace/`. Every write by the agent creates an auto-commit. Users can undo changes by asking the agent ("undo the last change") or manually with `git revert HEAD` in `workspace/`.
-- **Config files** — `agent-instructions.md`, `skills/`, and `permissions.json` are backed up to `data/backups/` before each modification. Up to 20 versions per file are retained.
+- **Config files** — `config/agent-instructions.md`, `config/personality.md`, `skills/`, and `permissions.json` are backed up to `data/backups/` before each modification. Up to 20 versions per file are retained.
 
 Git is optional — if not installed, workspace changes are simply unversioned. Config backups always work regardless.
 
@@ -517,35 +519,22 @@ pockethook-agent-server/
 │   ├── service.ts        # System service management
 │   ├── tunnel.ts         # HTTPS tunnel setup
 │   └── dev-tunnel.ts     # Combined dev server + tunnel
-├── skills/               # Framework-shipped skill definitions (read-only)
-├── custom-tools/         # Framework-shipped custom tool templates (read-only)
-├── docs/                 # Loadable reference docs (fetched via load_doc on demand)
-├── data/                 # Runtime data (memory.db, knowledge.db, backups, and user/ overlay)
-│   └── user/             # Per-deployment customization (git-ignored)
-│       ├── skills/       # User-authored skills (override base)
-│       ├── custom-tools/ # User-installed custom tools
-│       ├── instructions.md # User additions to agent instructions
-│       └── prefs.json    # Typed user values (referenced as {{prefs.key}} in skills)
-├── workspace/            # Agent's working directory
-│   └── dashboard/        # Custom dashboard files (hot-reloaded)
-├── agent-instructions.md # Base agent instructions (hot-reloaded)
-├── personality.md        # Agent personality and emoji config (hot-reloaded)
-├── permissions.json      # Tool permissions config
-└── .env                  # Runtime configuration
+├── skills/                    # Framework-shipped skill definitions (read-only)
+├── custom-tools/              # Framework-shipped custom tool templates (read-only)
+├── config/
+│   ├── agent-instructions.md  # Base agent instructions (hot-reloaded)
+│   └── personality.md         # Agent personality and emoji config (hot-reloaded)
+├── data/                      # Runtime data (memory.db, knowledge.db, backups, and user/ overlay)
+│   └── user/                  # Per-deployment customization (git-ignored)
+│       ├── skills/            # User-authored skills (override base)
+│       ├── custom-tools/      # User-installed custom tools
+│       ├── instructions.md    # User additions to agent instructions
+│       └── prefs.json         # Typed user values (referenced as {{prefs.key}} in skills)
+├── workspace/                 # Agent's working directory
+│   └── dashboard/             # Custom dashboard files (hot-reloaded)
+├── permissions.json           # Tool permissions config
+└── .env                       # Runtime configuration
 ```
-
-### Loadable docs (`docs/`)
-
-Long procedural references that don't need to live in the base prompt. Fetched on demand via the `load_doc` tool when the agent needs them.
-
-| Doc | Load when |
-|-----|-----------|
-| `content-rendering.md` | Composing rich messages (markdown, HTML, images, buttons) |
-| `skills-format.md` | Creating or editing a skill file |
-| `custom-tools-format.md` | Installing a new CLI library and wiring it as a tool |
-| `dashboard.md` | Customizing the `/dashboard` web page |
-| `serving-projects.md` | Starting a dev server, choosing tunnel mode, framework commands |
-| `memory-guide.md` | What to store, format conventions, PARA, evolving events |
 
 ## Testing
 

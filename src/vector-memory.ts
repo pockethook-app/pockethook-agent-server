@@ -71,19 +71,19 @@ export interface VectorSearchResult {
 // "user", "assistant", "project:<name>", "person:<name>", "place:<name>",
 // "pet:<name>", "company:<name>", "general"
 
-const VALID_ROOMS = [
+export const VALID_ROOMS = [
   "facts", "preferences", "opinions", "decisions", "events",
   "requests", "instructions", "answers", "suggestions", "context",
 ] as const;
 
-const VALID_HALLS = [
+export const VALID_HALLS = [
   "personal", "people", "places", "travel", "work", "tech", "health",
   "finance", "entertainment", "food", "shopping", "education", "sports",
   "home", "pets", "weather", "transport", "legal", "communication",
   "calendar", "creative", "news",
 ] as const;
 
-const VALID_STATUSES = [
+export const VALID_STATUSES = [
   "project",  // active, with outcome/deadline (PARA "Projects")
   "area",     // ongoing responsibility, no deadline (PARA "Areas") — DEFAULT
   "resource", // reference material, topics of interest (PARA "Resources")

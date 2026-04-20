@@ -16,9 +16,8 @@ const PERMISSIONS_PATH = join(PROJECT_ROOT, "permissions.json");
 // Paths outside working dir that the agent is allowed to access
 const ALLOWED_EXTERNAL_PATHS = [
   join(PROJECT_ROOT, "skills"),
-  join(PROJECT_ROOT, "docs"),
   join(PROJECT_ROOT, "custom-tools"),
-  join(PROJECT_ROOT, "agent-instructions.md"),
+  join(PROJECT_ROOT, "config"),
 ];
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -43,7 +42,7 @@ export interface Permissions {
 // ── Defaults ─────────────────────────────────────────────────────────────
 
 export const DEFAULT_PERMISSIONS: Permissions = {
-  tools: ["shell", "read", "write", "ls", "create_job", "list_jobs", "delete_job", "web_search", "web_fetch", "start_server", "stop_server", "list_servers"],
+  tools: ["shell", "read", "write", "ls", "create_project", "list_projects", "delete_project", "create_once_job", "create_cron_job", "list_jobs", "delete_job", "web_search", "web_fetch", "start_server", "stop_server", "list_servers"],
   shell: {
     blockedCommands: [
       "rm -rf /",

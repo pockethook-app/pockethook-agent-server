@@ -4,7 +4,7 @@ import type { AssistantMessage, Model, Api, Message } from "@mariozechner/pi-ai"
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Config } from "./config.js";
 import { updateEnvFile } from "./config.js";
-import { createRespondTool, createRunCodeJobTool, type PocketHookResponse } from "./tools.js";
+import { createRespondTools, createRunCodeJobTool, type PocketHookResponse } from "./tools.js";
 import { FAKE_ACK_TEXT } from "./sessions.js";
 import { logger } from "./logger.js";
 
@@ -165,10 +165,10 @@ export async function chat(
   const onRespond = (responses: PocketHookResponse[]) => {
     pockethookResponses = responses;
   };
-  const respondTool = createRespondTool(onRespond);
+  const respondTools = createRespondTools(onRespond);
   const runCodeJobTool = createRunCodeJobTool(config.workingDir, onRespond);
 
-  const allTools = [...tools, respondTool, runCodeJobTool];
+  const allTools = [...tools, ...respondTools, runCodeJobTool];
 
   const agent = new Agent({
     initialState: {

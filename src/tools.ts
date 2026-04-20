@@ -6,7 +6,7 @@
  */
 
 import { spawn } from "child_process";
-import { readFileSync, writeFileSync, readdirSync, statSync } from "fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from "fs";
 import { dirname, join, resolve, relative } from "path";
 import { fileURLToPath } from "url";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -21,7 +21,18 @@ import { commitWorkspace, backupConfigFile, backupSkills, configPaths } from "./
 import type { Config } from "./config.js";
 import { logger } from "./logger.js";
 
+import { VALID_ROOMS, VALID_HALLS, VALID_STATUSES } from "./vector-memory.js";
+
+function stringEnum(values: readonly string[], description: string) {
+  return Type.Union(values.map((v) => Type.Literal(v)) as any, { description });
+}
+
 const MAX_OUTPUT = 50_000; // chars
+
+// Shared schema patterns (used by multiple tools; kept at top for clarity).
+const INTERVAL_PATTERN = "^\\d+(?:s|m|h|d|w)$";
+const CRON_PATTERN = "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$";
+const PROJECT_NAME_PATTERN = "^[a-z][a-z0-9_-]{0,40}$";
 
 function truncate(text: string, max = MAX_OUTPUT): string {
   if (text.length <= max) return text;
@@ -37,12 +48,13 @@ function denied(reason: string): AgentToolResult<unknown> {
 
 // ── Base-path write guard ───────────────────────────────────────────────
 //
-// The framework ships `skills/`, `custom-tools/`, and `agent-instructions.md`
-// as read-only base files. Any user-authored content (new skills, custom
-// tools, global behavior rules) must go into `data/user/` instead so that
-// framework updates don't clobber user data. This guard is applied to the
-// `write` tool — shell is left unguarded (too many ways to write via shell;
-// we rely on the prompt + this guard being explicit enough).
+// The framework ships `skills/`, `custom-tools/`, and `config/` (agent-
+// instructions.md + personality.md) as read-only base files. Any user-
+// authored content (new skills, custom tools, global behavior rules) must
+// go into `data/user/` instead so that framework updates don't clobber
+// user data. This guard is applied to the `write` tool — shell is left
+// unguarded (too many ways to write via shell; we rely on the prompt +
+// this guard being explicit enough).
 
 const TOOLS_PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const USER_INSTRUCTIONS_PATH = resolve(TOOLS_PROJECT_ROOT, "data/user/instructions.md");
@@ -265,27 +277,7 @@ function createLsTool(cwd: string, perms: Permissions): AgentTool<typeof lsSchem
   };
 }
 
-// ── PocketHook respond tool ──────────────────────────────────────────────
-
-const respondStepSchema = Type.Object({
-  msg: Type.String({ description: "Message to display to the user" }),
-  shortcut: Type.Optional(Type.String({ description: "iOS Shortcut name to execute (exact name as configured on the device)" })),
-  data: Type.Optional(Type.Union([
-    Type.Record(Type.String(), Type.Unknown()),
-    Type.Array(Type.Record(Type.String(), Type.Unknown())),
-  ], { description: "JSON data to pass to the shortcut (object or array of objects)" })),
-  url: Type.Optional(Type.String({ description: "HTTPS URL to attach to the response" })),
-  run_on: Type.Optional(Type.Union([Type.Literal("server"), Type.Literal("device")], {
-    description: "Where to execute the shortcut: 'server' (on the Mac server) or 'device' (on the iOS device, default). Use 'server' only for shortcuts from skills with target: mac.",
-  })),
-});
-
-const respondSchema = Type.Object({
-  steps: Type.Array(respondStepSchema, {
-    description: "One or more response steps. Each step can display a message and optionally trigger an iOS Shortcut. Steps execute sequentially on the device.",
-    minItems: 1,
-  }),
-});
+// ── PocketHook respond tools ─────────────────────────────────────────────
 
 export interface PocketHookResponse {
   msg: string;
@@ -293,6 +285,30 @@ export interface PocketHookResponse {
   data?: Record<string, unknown> | Record<string, unknown>[];
   url?: string;
   run_on?: "server" | "device";
+}
+
+// Shared: button spec used by respond_buttons and sequence steps.
+const buttonSchema = Type.Object({
+  label: Type.String({ description: "Button label shown to the user.", maxLength: 40 }),
+  action: Type.Union([
+    Type.Literal("sendMessage"),
+    Type.Literal("openURL"),
+    Type.Literal("triggerShortcut"),
+  ], { description: "sendMessage: value is sent back as a new message. openURL: value is an https URL opened in the browser. triggerShortcut: value is the exact name of an iOS Shortcut to run." }),
+  value: Type.String({ description: "Value for the action: message text, URL, or shortcut name." }),
+});
+
+function buildButtonsMsg(msg: string, buttons: Array<{ label: string; action: string; value: string }>): string {
+  const lines = buttons.map((b) => `Button: ${b.label} | ${b.action}: ${b.value}`);
+  return msg.trimEnd() + "\n" + lines.join("\n");
+}
+
+function wrapHtml(html: string): string {
+  const trimmed = html.trimStart();
+  if (trimmed.startsWith("<div") || trimmed.startsWith("<html") || trimmed.startsWith("<!DOCTYPE")) {
+    return html;
+  }
+  return `<div>${html}</div>`;
 }
 
 // ── Respond URL sanitization ────────────────────────────────────────────
@@ -382,52 +398,233 @@ function sanitizeResponseStep(step: PocketHookResponse, tunnels: Map<number, str
   return { ...step, msg: msgResult.text, url };
 }
 
-export function createRespondTool(
+function emit(
   onRespond: (responses: PocketHookResponse[]) => void,
-): AgentTool<typeof respondSchema> {
+  raw: PocketHookResponse | PocketHookResponse[],
+): number {
+  const tunnels = buildPortToTunnelMap();
+  const list = Array.isArray(raw) ? raw : [raw];
+  const sanitized = list.map((step) => sanitizeResponseStep(step, tunnels));
+  onRespond(sanitized);
+  return sanitized.length;
+}
+
+// ── respond_text ─────────────────────────────────────────────────────────
+
+const respondTextSchema = Type.Object({
+  text: Type.String({ description: "Message text. Markdown is supported (bold, italic, code, links, lists)." }),
+});
+
+function createRespondTextTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondTextSchema> {
   return {
-    name: "respond",
-    label: "Send response to PocketHook",
-    description: `Send the final response to the user's PocketHook iOS app. You MUST call this tool to deliver your response. Each step can include a message and optionally trigger an iOS Shortcut by name. Use multiple steps for sequential automations.`,
-    parameters: respondSchema,
+    name: "respond_text",
+    label: "Send text message",
+    description: "Send a plain text (or Markdown) message to the user. This is the default way to reply when you just need to say something. For images use respond_image, for buttons respond_buttons, for HTML respond_html, for shortcuts respond_shortcut. NEVER embed image URLs or Button: lines in the text here — those require their dedicated tools.",
+    parameters: respondTextSchema,
     async execute(_id, params) {
-      const tunnels = buildPortToTunnelMap();
-      const responses: PocketHookResponse[] = params.steps.map((step) => sanitizeResponseStep({
-        msg: step.msg,
-        shortcut: step.shortcut,
-        data: step.data as Record<string, unknown> | Record<string, unknown>[] | undefined,
-        url: step.url,
-        run_on: step.run_on,
-      }, tunnels));
-      onRespond(responses);
-      return {
-        content: [{ type: "text", text: `Response sent (${responses.length} step${responses.length > 1 ? "s" : ""})` }],
-        details: { steps: responses.length },
-      };
+      emit(onRespond, { msg: params.text });
+      return { content: [{ type: "text", text: "Text response sent." }], details: { kind: "text" } };
     },
   };
 }
 
-// ── run_code_job (compound tool) ─────────────────────────────────────────
-//
-// Encapsulates the "respond ack + create shell job running claude --print"
-// pattern so the agent only has to make one decision ("is this a
-// programming task?") instead of orchestrating two tool calls. The handler
-// composes the shell command, creates the job, and emits the
-// user-facing ack via the shared respond callback.
+// ── respond_image ────────────────────────────────────────────────────────
 
-const runCodeJobSchema = Type.Object({
-  task: Type.String({ description: "What Claude Code should do. Written in natural language. Include success criteria (e.g., 'create a Bun + Hono API with GET /health, install deps, verify it compiles')." }),
-  project_dir: Type.Optional(Type.String({ description: "Project directory for the work. Accepts an absolute path or a path relative to the workspace/ directory. Default: workspace/." })),
-  timeout: Type.Optional(Type.String({ description: "Max runtime for the job. Use interval format: '30m' (default) for typical tasks, '1h' for heavy ones, '15m' for short ones." })),
-  ack_message: Type.Optional(Type.String({ description: "Short user-facing ack sent immediately (same language as the user). Default: 'On it — I'll let you know when it's done.'" })),
+const respondImageSchema = Type.Object({
+  url: Type.String({
+    pattern: "^https?://\\S+\\.(?:png|jpg|jpeg|gif|webp)(?:\\?\\S*)?$",
+    description: "Image URL. MUST end in .png/.jpg/.jpeg/.gif/.webp (optionally with a querystring). The URL is sent as the ENTIRE message — no caption, no prefix, no suffix. If you need text alongside an image, send the text separately via respond_text AFTER this call is not possible (one response per turn); instead pick the more important of text vs image for this turn.",
+  }),
 });
 
-function shellEscapeSingleQuoted(value: string): string {
-  // Wrap a value in single quotes, handling any embedded single quotes via
-  // close-quote / escaped-quote / reopen-quote (the standard POSIX trick).
-  return "'" + value.replace(/'/g, "'\\''") + "'";
+function createRespondImageTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondImageSchema> {
+  return {
+    name: "respond_image",
+    label: "Send image",
+    description: "Send an image to the user. The iOS app renders the URL as an inline image ONLY when the msg is EXACTLY the URL (starts with https and ends with a valid image extension). This tool enforces that — you pass only the URL, nothing else. Don't try to caption it; any surrounding text breaks the render.",
+    parameters: respondImageSchema,
+    async execute(_id, params) {
+      emit(onRespond, { msg: params.url });
+      return { content: [{ type: "text", text: "Image response sent." }], details: { kind: "image" } };
+    },
+  };
 }
+
+// ── respond_buttons ──────────────────────────────────────────────────────
+
+const respondButtonsSchema = Type.Object({
+  msg: Type.String({ description: "Text shown above the buttons. Markdown supported." }),
+  buttons: Type.Array(buttonSchema, {
+    minItems: 1,
+    maxItems: 5,
+    description: "1 to 5 interactive buttons rendered below the msg.",
+  }),
+});
+
+function createRespondButtonsTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondButtonsSchema> {
+  return {
+    name: "respond_buttons",
+    label: "Send message with buttons",
+    description: "Send a message with interactive buttons. The tool builds the exact `Button: label | action: value` syntax internally — do NOT hand-craft that syntax in respond_text. Each button has an action: sendMessage (text echoes back), openURL (opens browser), or triggerShortcut (runs iOS Shortcut by exact name).",
+    parameters: respondButtonsSchema,
+    async execute(_id, params) {
+      const combined = buildButtonsMsg(params.msg, params.buttons);
+      emit(onRespond, { msg: combined });
+      return { content: [{ type: "text", text: `Sent message with ${params.buttons.length} button(s).` }], details: { kind: "buttons", count: params.buttons.length } };
+    },
+  };
+}
+
+// ── respond_shortcut ─────────────────────────────────────────────────────
+
+const respondShortcutSchema = Type.Object({
+  msg: Type.String({ description: "Message shown while the shortcut runs (e.g., 'Creating note...')." }),
+  shortcut_name: Type.String({ description: "EXACT name of the iOS Shortcut as configured on the device — case and spacing matter." }),
+  data: Type.Optional(Type.Union([
+    Type.Record(Type.String(), Type.Unknown()),
+    Type.Array(Type.Record(Type.String(), Type.Unknown())),
+  ], { description: "Payload passed to the shortcut. Object for single-input shortcuts, array for batch ones." })),
+  run_on: Type.Optional(Type.Union([Type.Literal("device"), Type.Literal("server")], {
+    description: "device (default): run on the iOS device. server: run on the Mac server (only for skills with target: mac).",
+  })),
+});
+
+function createRespondShortcutTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondShortcutSchema> {
+  return {
+    name: "respond_shortcut",
+    label: "Trigger iOS Shortcut",
+    description: "Send a message and trigger an iOS Shortcut by name. Use this when the user asks for an action that maps to a shortcut (create note, schedule calendar event, etc.) — the shortcut name must match exactly. Load the relevant skill first (load_skill) to know the required fields in `data`.",
+    parameters: respondShortcutSchema,
+    async execute(_id, params) {
+      emit(onRespond, {
+        msg: params.msg,
+        shortcut: params.shortcut_name,
+        data: params.data as Record<string, unknown> | Record<string, unknown>[] | undefined,
+        run_on: params.run_on,
+      });
+      return { content: [{ type: "text", text: `Shortcut response sent (${params.shortcut_name}).` }], details: { kind: "shortcut", shortcut: params.shortcut_name } };
+    },
+  };
+}
+
+// ── respond_html ─────────────────────────────────────────────────────────
+
+const respondHtmlSchema = Type.Object({
+  html: Type.String({ description: "HTML content. Will be auto-wrapped in <div>…</div> if it doesn't already start with <div, <html or <!DOCTYPE — iOS requires one of those prefixes to detect HTML mode." }),
+});
+
+function createRespondHtmlTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondHtmlSchema> {
+  return {
+    name: "respond_html",
+    label: "Send HTML",
+    description: "Send rich HTML content. Use when Markdown isn't enough (tables, complex layouts, inline images via <img>). The tool auto-wraps in <div> if the prefix is missing.",
+    parameters: respondHtmlSchema,
+    async execute(_id, params) {
+      emit(onRespond, { msg: wrapHtml(params.html) });
+      return { content: [{ type: "text", text: "HTML response sent." }], details: { kind: "html" } };
+    },
+  };
+}
+
+// ── respond_sequence ─────────────────────────────────────────────────────
+
+const seqTextStepSchema = Type.Object({
+  kind: Type.Literal("text"),
+  text: Type.String({ description: "Message text for this step." }),
+});
+
+const seqShortcutStepSchema = Type.Object({
+  kind: Type.Literal("shortcut"),
+  msg: Type.String(),
+  shortcut_name: Type.String(),
+  data: Type.Optional(Type.Union([
+    Type.Record(Type.String(), Type.Unknown()),
+    Type.Array(Type.Record(Type.String(), Type.Unknown())),
+  ])),
+  run_on: Type.Optional(Type.Union([Type.Literal("device"), Type.Literal("server")])),
+});
+
+const seqButtonsStepSchema = Type.Object({
+  kind: Type.Literal("buttons"),
+  msg: Type.String(),
+  buttons: Type.Array(buttonSchema, { minItems: 1, maxItems: 5 }),
+});
+
+const respondSequenceSchema = Type.Object({
+  steps: Type.Array(Type.Union([
+    seqTextStepSchema,
+    seqShortcutStepSchema,
+    seqButtonsStepSchema,
+  ]), {
+    minItems: 2,
+    description: "Ordered steps. iOS concatenates all msg values into ONE bubble (with bullets) and runs each shortcut in order. This is NOT multi-bubble — it's for chaining shortcuts with textual acks. If you just want to reply with one message, use respond_text.",
+  }),
+});
+
+type SeqStep =
+  | { kind: "text"; text: string }
+  | { kind: "shortcut"; msg: string; shortcut_name: string; data?: Record<string, unknown> | Record<string, unknown>[]; run_on?: "device" | "server" }
+  | { kind: "buttons"; msg: string; buttons: Array<{ label: string; action: "sendMessage" | "openURL" | "triggerShortcut"; value: string }> };
+
+function createRespondSequenceTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondSequenceSchema> {
+  return {
+    name: "respond_sequence",
+    label: "Send sequence of response steps",
+    description: "Chain multiple response steps in one turn. iOS concatenates the msg values into ONE bubble with bullets, and runs shortcuts in order. Image and HTML steps are NOT allowed here — they require the full msg to be just the URL or HTML, which breaks in the concatenation. Use this only when you need multiple shortcuts with textual acks.",
+    parameters: respondSequenceSchema,
+    async execute(_id, params) {
+      const responses: PocketHookResponse[] = (params.steps as SeqStep[]).map((step) => {
+        if (step.kind === "text") {
+          return { msg: step.text };
+        }
+        if (step.kind === "shortcut") {
+          return {
+            msg: step.msg,
+            shortcut: step.shortcut_name,
+            data: step.data,
+            run_on: step.run_on,
+          };
+        }
+        return { msg: buildButtonsMsg(step.msg, step.buttons) };
+      });
+      const count = emit(onRespond, responses);
+      return { content: [{ type: "text", text: `Sequence sent (${count} step${count > 1 ? "s" : ""}).` }], details: { kind: "sequence", count } };
+    },
+  };
+}
+
+// ── Public factory: all respond sub-tools ────────────────────────────────
+
+export function createRespondTools(
+  onRespond: (responses: PocketHookResponse[]) => void,
+): AgentTool<any>[] {
+  return [
+    createRespondTextTool(onRespond),
+    createRespondImageTool(onRespond),
+    createRespondButtonsTool(onRespond),
+    createRespondShortcutTool(onRespond),
+    createRespondHtmlTool(onRespond),
+    createRespondSequenceTool(onRespond),
+  ];
+}
+
+// ── run_code_job (compound tool) ─────────────────────────────────────────
+//
+// Encapsulates the "respond ack + create background programming job"
+// pattern so the agent only has to make one decision ("is this a
+// programming task?") instead of orchestrating two tool calls. The handler
+// creates a prompt-type job (executed by the configured model) and emits
+// the user-facing ack via the shared respond callback.
+
+const runCodeJobSchema = Type.Object({
+  task: Type.String({ description: "What the programming job should do. Natural language. Include success criteria (e.g., 'create a Bun + Hono API with GET /health, install deps, verify it compiles')." }),
+  project_name: Type.Optional(Type.String({
+    pattern: PROJECT_NAME_PATTERN,
+    description: "Workspace project to work in (e.g. 'my-blog', 'dashboard'). Lowercase letters/digits/underscore/dash only, max 40 chars. NEVER pass a path — the tool resolves it under the workspace root. Omit to work at the workspace root itself. The project is created if it doesn't exist yet.",
+  })),
+  timeout: Type.Optional(Type.String({ pattern: INTERVAL_PATTERN, description: "Max runtime. '30m' default, '1h' for heavy tasks." })),
+  ack_message: Type.Optional(Type.String({ description: "User-facing ack sent immediately, in the user's language. Default: 'On it — I'll let you know when it's done.'" })),
+});
 
 export function createRunCodeJobTool(
   cwd: string,
@@ -435,8 +632,8 @@ export function createRunCodeJobTool(
 ): AgentTool<typeof runCodeJobSchema> {
   return {
     name: "run_code_job",
-    label: "Run programming task via Claude Code",
-    description: "Run any programming task (create project, review code, debug, build, tests, refactor) as a Claude Code background job. Use this INSTEAD of calling shell/read/write directly for code work — PocketHook's HTTP request has a short timeout, so heavy work must go to a background job. This tool handles the respond ack + job creation in one call. Do NOT use for single simple reads (e.g., 'show me file X') — use the `read` tool for that. If you are already running inside a background job (your message starts with [BACKGROUND JOB]), do NOT call this; do the work directly.",
+    label: "Run programming task as a background job",
+    description: "Run any programming task (create project, review code, debug, build, tests, refactor) as a background job executed by the configured model. Use this INSTEAD of calling shell/read/write directly for code work — PocketHook's HTTP request has a short timeout, so heavy work must go to a background job. This tool handles the respond ack + job creation in one call. Do NOT use for single simple reads (e.g., 'show me file X') — use the `read` tool for that. If you are already running inside a background job (your message starts with [BACKGROUND JOB]), do NOT call this; do the work directly.",
     parameters: runCodeJobSchema,
     async execute(_id, params) {
       try {
@@ -444,16 +641,16 @@ export function createRunCodeJobTool(
         const ackMessage = (params.ack_message ?? defaultAck).trim() || defaultAck;
         const timeout = params.timeout ?? "30m";
 
-        const workspaceRoot = resolve(cwd, "workspace");
-        const targetDir = params.project_dir
-          ? resolve(workspaceRoot, params.project_dir)
+        const workspaceRoot = cwd;
+        const targetDir = params.project_name
+          ? join(workspaceRoot, params.project_name)
           : workspaceRoot;
 
-        const promptArg = shellEscapeSingleQuoted(
-          `${params.task}\n\nIMPORTANT: Always use non-interactive flags (--yes, -y, --defaults, --no-interactive) in all CLI commands. You cannot respond to interactive prompts.`,
-        );
-        const dirArg = shellEscapeSingleQuoted(targetDir);
-        const shellCommand = `cd ${dirArg} && claude -p --dangerously-skip-permissions ${promptArg}`;
+        if (!existsSync(targetDir)) {
+          mkdirSync(targetDir, { recursive: true });
+        }
+
+        const jobPrompt = `Working directory: ${targetDir}\n\nTask:\n${params.task}\n\nComplete the task end-to-end. Use your shell/read/write tools as needed, and verify your work (builds compile, tests pass, files exist). Always use non-interactive flags (--yes, -y, --defaults, --no-interactive) in CLI commands — you cannot respond to interactive prompts.`;
 
         const jobName = params.task.length > 60 ? params.task.slice(0, 57) + "..." : params.task;
 
@@ -461,8 +658,8 @@ export function createRunCodeJobTool(
           name: jobName,
           type: "once",
           schedule: undefined,
-          prompt: shellCommand,
-          execution_type: "shell",
+          prompt: jobPrompt,
+          execution_type: "prompt",
           delay: undefined,
           timeout,
           silent: undefined,
@@ -481,7 +678,7 @@ export function createRunCodeJobTool(
         return {
           content: [{
             type: "text",
-            text: `Job #${job.id} "${jobName}" created (once/shell, timeout ${timeout}). Ack "${ackMessage}" ${onRespond ? "sent to user" : "(no respond channel — call respond manually)"}. Do NOT call respond again for this task; the user will receive the result when the job completes.`,
+            text: `Job #${job.id} "${jobName}" created (once/prompt, timeout ${timeout}). Ack "${ackMessage}" ${onRespond ? "sent to user" : "(no respond channel — call respond manually)"}. Do NOT call respond again for this task; the user will receive the result when the job completes.`,
           }],
           details: { jobId: job.id, ackMessage, targetDir },
         };
@@ -495,39 +692,216 @@ export function createRunCodeJobTool(
   };
 }
 
-// ── Job tools ────────────────────────────────────────────────────────────
+// ── Workspace project tools ──────────────────────────────────────────────
+//
+// Dedicated, name-only tools for managing projects under the workspace dir.
+// Before these tools the agent had to compose paths (often getting them
+// wrong: workspace/workspace/…). These tools accept just a project NAME and
+// resolve the absolute path internally.
 
-const createJobSchema = Type.Object({
-  name: Type.String({ description: "Human-readable job name" }),
-  type: Type.Union([Type.Literal("once"), Type.Literal("cron")], {
-    description: "once = run once, cron = repeat on schedule",
+const createProjectSchema = Type.Object({
+  name: Type.String({
+    pattern: PROJECT_NAME_PATTERN,
+    description: "Project name. Lowercase letters/digits/underscore/dash, starting with a letter, max 40 chars. The actual directory is created at <workspace>/<name>/.",
   }),
-  schedule: Type.Optional(Type.String({ description: "Schedule for cron jobs. Simple intervals: '30s', '5m', '1h', '1d', '2w'. Cron expressions: '0 9 * * MON' (at 9am every Monday), '*/30 * * * *' (every 30 min), '0 0 1 * *' (1st of each month). Required for cron type." })),
-  prompt: Type.String({ description: "What to execute: shell command or agent prompt" }),
-  execution_type: Type.Optional(Type.Union([Type.Literal("shell"), Type.Literal("prompt")], {
-    description: "shell = run as bash command (default), prompt = send to AI agent",
-  })),
-  delay: Type.Optional(Type.String({ description: "Delay before first run: '5m', '1h', etc. Default: immediate" })),
-  timeout: Type.Optional(Type.String({ description: "Max execution time for shell jobs. Use interval format: '5m', '30m', '1h'. Default: 60s. Set to '30m' or '1h' for long-running commands like Claude Code." })),
-  silent: Type.Optional(Type.Boolean({ description: "If true, the job won't trigger /jobs polling when it completes. Default: false" })),
-  on_complete_shortcut: Type.Optional(Type.String({ description: "iOS Shortcut to trigger when the job completes (exact name). The shortcut receives the job output in the 'output' field of data." })),
-  on_complete_data: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Extra data fields to pass to the shortcut on completion. The job output is automatically added as 'output'." })),
+  template: Type.Optional(Type.Union([
+    Type.Literal("empty"),
+    Type.Literal("node"),
+    Type.Literal("python"),
+    Type.Literal("static"),
+  ], { description: "Optional scaffold. empty (default): just the directory. node: package.json stub. python: main.py + requirements.txt. static: index.html." })),
+  description: Type.Optional(Type.String({ description: "One-line description stored in a README.md if the template has one." })),
 });
 
-function createCreateJobTool(): AgentTool<typeof createJobSchema> {
+function scaffoldProject(dir: string, name: string, template: string, description: string | undefined): string[] {
+  const created: string[] = [];
+  if (template === "empty") return created;
+
+  if (template === "node") {
+    const pkg = {
+      name,
+      version: "0.0.1",
+      ...(description ? { description } : {}),
+      scripts: { start: "node index.js" },
+    };
+    writeFileSync(join(dir, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
+    writeFileSync(join(dir, "index.js"), `console.log("${name} running");\n`);
+    created.push("package.json", "index.js");
+  } else if (template === "python") {
+    writeFileSync(join(dir, "main.py"), `def main():\n    print("${name} running")\n\n\nif __name__ == "__main__":\n    main()\n`);
+    writeFileSync(join(dir, "requirements.txt"), "");
+    created.push("main.py", "requirements.txt");
+  } else if (template === "static") {
+    const html = `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <title>${name}</title>\n</head>\n<body>\n  <h1>${name}</h1>\n  ${description ? `<p>${description}</p>` : ""}\n</body>\n</html>\n`;
+    writeFileSync(join(dir, "index.html"), html);
+    created.push("index.html");
+  }
+  return created;
+}
+
+function createCreateProjectTool(cwd: string): AgentTool<typeof createProjectSchema> {
   return {
-    name: "create_job",
-    label: "Create background job",
-    description: "Create a background job that runs on a schedule (cron) or once. Shell jobs run bash commands; prompt jobs are processed by the AI agent.",
-    parameters: createJobSchema,
+    name: "create_project",
+    label: "Create workspace project",
+    description: "Create a new project directory inside the workspace. Pass only a NAME — the tool resolves the path automatically. Optionally pick a template (node/python/static) for a minimal scaffold. Use this instead of building paths with shell/write.",
+    parameters: createProjectSchema,
+    async execute(_id, params) {
+      const dir = join(cwd, params.name);
+      if (existsSync(dir)) {
+        return {
+          content: [{ type: "text", text: `Project "${params.name}" already exists at ${dir}. Use a different name or work on the existing one.` }],
+          details: { error: "exists", dir },
+        };
+      }
+      try {
+        mkdirSync(dir, { recursive: true });
+        const template = params.template ?? "empty";
+        const created = scaffoldProject(dir, params.name, template, params.description);
+        commitWorkspace(`auto: create project ${params.name}`);
+        return {
+          content: [{ type: "text", text: `Created project "${params.name}" at ${dir} (${template} template). Files: ${created.length > 0 ? created.join(", ") : "none (empty)"}.` }],
+          details: { name: params.name, dir, template, files: created },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error creating project: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
+const listProjectsSchema = Type.Object({});
+
+function createListProjectsTool(cwd: string): AgentTool<typeof listProjectsSchema> {
+  return {
+    name: "list_projects",
+    label: "List workspace projects",
+    description: "List all projects (subdirectories) under the workspace. Use this before creating a new project to check for name collisions, or when the user asks what they have.",
+    parameters: listProjectsSchema,
+    async execute() {
+      try {
+        const entries = readdirSync(cwd, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+          .map((e) => e.name)
+          .sort();
+        if (entries.length === 0) {
+          return { content: [{ type: "text", text: "No projects in workspace yet." }], details: { count: 0 } };
+        }
+        return {
+          content: [{ type: "text", text: `Projects (${entries.length}):\n` + entries.map((n) => `- ${n}`).join("\n") }],
+          details: { count: entries.length, projects: entries },
+        };
+      } catch (err: any) {
+        return { content: [{ type: "text", text: `Error listing projects: ${err.message}` }], details: { error: err.message } };
+      }
+    },
+  };
+}
+
+const deleteProjectSchema = Type.Object({
+  name: Type.String({ pattern: PROJECT_NAME_PATTERN, description: "Project name to delete (must match an existing workspace project)." }),
+  confirm: Type.Literal(true, { description: "Must be `true`. An explicit confirmation so this destructive call isn't made by accident." }),
+});
+
+function createDeleteProjectTool(cwd: string, perms: Permissions): AgentTool<typeof deleteProjectSchema> {
+  return {
+    name: "delete_project",
+    label: "Delete workspace project",
+    description: "Delete a workspace project (removes its directory recursively). Requires `confirm: true`. Ask the user for explicit confirmation before calling — this cannot be undone outside of git history.",
+    parameters: deleteProjectSchema,
+    async execute(_id, params) {
+      const dir = join(cwd, params.name);
+      if (!existsSync(dir)) {
+        return { content: [{ type: "text", text: `Project "${params.name}" not found at ${dir}.` }], details: { error: "not_found" } };
+      }
+      // Use shell rm -rf so we reuse the shell permission layer rather than
+      // reimplementing a recursive delete here.
+      const check = checkShellPermission(`rm -rf ${dir}`, perms);
+      if (!check.allowed) return denied(check.reason!);
+      try {
+        const { spawnSync } = await import("child_process");
+        const result = spawnSync("rm", ["-rf", dir]);
+        if (result.status !== 0) {
+          return { content: [{ type: "text", text: `Error deleting project: ${result.stderr?.toString() ?? "unknown"}` }], details: { error: "rm_failed" } };
+        }
+        commitWorkspace(`auto: delete project ${params.name}`);
+        return {
+          content: [{ type: "text", text: `Deleted project "${params.name}".` }],
+          details: { name: params.name },
+        };
+      } catch (err: any) {
+        return { content: [{ type: "text", text: `Error deleting project: ${err.message}` }], details: { error: err.message } };
+      }
+    },
+  };
+}
+
+// ── Job tools ────────────────────────────────────────────────────────────
+//
+// Typed replacements for the old `create_job`. Two tools (once / cron) +
+// discriminated-union `body` prevent the invalid combinations the LLM used
+// to produce (e.g. type=once with a schedule, shell+prompt mixups).
+
+const jobBodySchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("shell"),
+    command: Type.String({ description: "Bash command to run. Use non-interactive flags (--yes, -y, --defaults) — you cannot respond to prompts." }),
+  }),
+  Type.Object({
+    kind: Type.Literal("prompt"),
+    prompt: Type.String({ description: "Natural-language task sent to the AI agent. Include success criteria so the agent can verify completion." }),
+  }),
+], { description: "What the job does. Pick 'shell' to run a bash command, 'prompt' to run an AI sub-agent." });
+
+const cronScheduleSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("interval"),
+    value: Type.String({ pattern: INTERVAL_PATTERN, description: "Interval like '30s', '5m', '1h', '1d', '2w'." }),
+  }),
+  Type.Object({
+    kind: Type.Literal("cron"),
+    expression: Type.String({ pattern: CRON_PATTERN, description: "5-field cron expression: 'min hour day month weekday'. Examples: '0 9 * * MON', '*/30 * * * *', '0 0 1 * *'." }),
+  }),
+], { description: "Cron job schedule. Pick 'interval' for simple periods, 'cron' for specific times." });
+
+type JobBody =
+  | { kind: "shell"; command: string }
+  | { kind: "prompt"; prompt: string };
+
+function bodyToOpts(body: JobBody): { prompt: string; execution_type: "shell" | "prompt" } {
+  return body.kind === "shell"
+    ? { prompt: body.command, execution_type: "shell" }
+    : { prompt: body.prompt, execution_type: "prompt" };
+}
+
+// ── create_once_job ──────────────────────────────────────────────────────
+
+const createOnceJobSchema = Type.Object({
+  name: Type.String({ description: "Human-readable job name." }),
+  body: jobBodySchema,
+  delay: Type.Optional(Type.String({ pattern: INTERVAL_PATTERN, description: "Delay before the (single) run. Default: immediate." })),
+  timeout: Type.Optional(Type.String({ pattern: INTERVAL_PATTERN, description: "Max runtime. Default: 60s for shell, 30m for prompt." })),
+  silent: Type.Optional(Type.Boolean({ description: "If true, completion won't trigger /jobs polling." })),
+  on_complete_shortcut: Type.Optional(Type.String({ description: "iOS Shortcut to trigger on completion (exact name). Receives the job output as `output`." })),
+  on_complete_data: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Extra data fields passed to the completion shortcut." })),
+});
+
+function createOnceJobTool(): AgentTool<typeof createOnceJobSchema> {
+  return {
+    name: "create_once_job",
+    label: "Create one-off background job",
+    description: "Create a background job that runs ONCE. Use for long-running work the agent can't do inline (deep research, multi-page scraping, reports). For programming tasks prefer `run_code_job`. Pass `body: { kind: 'shell', command }` for a bash command, or `body: { kind: 'prompt', prompt }` for an AI-driven task.",
+    parameters: createOnceJobSchema,
     async execute(_id, params) {
       try {
+        const { prompt, execution_type } = bodyToOpts(params.body as JobBody);
         const job = createJob({
           name: params.name,
-          type: params.type,
-          schedule: params.schedule,
-          prompt: params.prompt,
-          execution_type: params.execution_type ?? "shell",
+          type: "once",
+          prompt,
+          execution_type,
           delay: params.delay,
           timeout: params.timeout,
           silent: params.silent,
@@ -536,12 +910,57 @@ function createCreateJobTool(): AgentTool<typeof createJobSchema> {
         });
         const nextRun = new Date(job.next_run_at).toISOString();
         return {
-          content: [{ type: "text", text: `Job #${job.id} "${job.name}" created (${job.type}, ${job.execution_type}). Next run: ${nextRun}` }],
+          content: [{ type: "text", text: `Job #${job.id} "${job.name}" created (once, ${execution_type}). Runs at: ${nextRun}` }],
           details: { jobId: job.id },
         };
       } catch (err: any) {
         return {
-          content: [{ type: "text", text: `Error creating job: ${err.message}` }],
+          content: [{ type: "text", text: `Error creating once job: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  };
+}
+
+// ── create_cron_job ──────────────────────────────────────────────────────
+
+const createCronJobSchema = Type.Object({
+  name: Type.String({ description: "Human-readable job name." }),
+  schedule: cronScheduleSchema,
+  body: jobBodySchema,
+  timeout: Type.Optional(Type.String({ pattern: INTERVAL_PATTERN, description: "Max runtime per run." })),
+  silent: Type.Optional(Type.Boolean({ description: "If true, completion won't trigger /jobs polling." })),
+});
+
+function createCronJobTool(): AgentTool<typeof createCronJobSchema> {
+  return {
+    name: "create_cron_job",
+    label: "Create recurring background job",
+    description: "Create a background job that runs on a SCHEDULE. Use `schedule: { kind: 'interval', value: '5m' }` for simple periods or `schedule: { kind: 'cron', expression: '0 9 * * MON' }` for specific times. Body is the same shell/prompt union as create_once_job.",
+    parameters: createCronJobSchema,
+    async execute(_id, params) {
+      try {
+        const schedule = params.schedule as { kind: "interval"; value: string } | { kind: "cron"; expression: string };
+        const scheduleStr = schedule.kind === "interval" ? schedule.value : schedule.expression;
+        const { prompt, execution_type } = bodyToOpts(params.body as JobBody);
+        const job = createJob({
+          name: params.name,
+          type: "cron",
+          schedule: scheduleStr,
+          prompt,
+          execution_type,
+          timeout: params.timeout,
+          silent: params.silent,
+        });
+        const nextRun = new Date(job.next_run_at).toISOString();
+        return {
+          content: [{ type: "text", text: `Job #${job.id} "${job.name}" created (cron "${scheduleStr}", ${execution_type}). Next run: ${nextRun}` }],
+          details: { jobId: job.id },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error creating cron job: ${err.message}` }],
           details: { error: err.message },
         };
       }
@@ -607,7 +1026,7 @@ function createDeleteJobTool(): AgentTool<typeof deleteJobSchema> {
 
 const webSearchSchema = Type.Object({
   query: Type.String({ description: "Search query" }),
-  num_results: Type.Optional(Type.Number({ description: "Number of results to return (default: 5, max: 10)" })),
+  num_results: Type.Optional(Type.Number({ minimum: 1, maximum: 10, description: "Number of results to return (1-10, default 5)" })),
 });
 
 function createWebSearchTool(config: Config): AgentTool<typeof webSearchSchema> {
@@ -742,11 +1161,14 @@ function createWebFetchTool(): AgentTool<typeof webFetchSchema> {
 // ── Server management tools ──────────────────────────────────────────────
 
 const startServerSchema = Type.Object({
-  name: Type.String({ description: "Human-readable name for the server (e.g., 'Hugo blog', 'React app')" }),
-  command: Type.String({ description: "Shell command to start the dev server. Use $PORT as placeholder for the assigned port (e.g., 'hugo server -p $PORT', 'npm run dev -- --port $PORT')" }),
-  cwd: Type.String({ description: "Working directory for the command (absolute path or relative to workspace)" }),
-  port: Type.Optional(Type.Number({ description: "Preferred port (default: auto-assign starting from 4000)" })),
-  tunnel: Type.Optional(Type.Boolean({ description: "Expose via HTTPS tunnel (Tailscale). Default: false" })),
+  name: Type.String({ description: "Human-readable name for the server (e.g., 'Hugo blog', 'React app')." }),
+  command: Type.String({ description: "Shell command to start the dev server. Use $PORT as the port placeholder (e.g., 'hugo server -p $PORT', 'npm run dev -- --port $PORT'). Bind to 0.0.0.0/--host when possible so external requests (tunnel) reach it." }),
+  project_name: Type.String({
+    pattern: PROJECT_NAME_PATTERN,
+    description: "Workspace project to run the server in. Name only — the tool resolves the path. Create the project first with create_project if it doesn't exist.",
+  }),
+  port: Type.Optional(Type.Number({ description: "Preferred port. Default: auto-assign starting from 4000." })),
+  tunnel: Type.Optional(Type.Boolean({ description: "Expose via HTTPS tunnel (Tailscale). Default: false. Set to true whenever the user will open the URL on their phone." })),
 });
 
 function createStartServerTool(cwd: string, perms: Permissions): AgentTool<typeof startServerSchema> {
@@ -778,7 +1200,13 @@ function createStartServerTool(cwd: string, perms: Permissions): AgentTool<typeo
       }
 
       try {
-        const resolvedCwd = resolve(cwd, params.cwd);
+        const resolvedCwd = join(cwd, params.project_name);
+        if (!existsSync(resolvedCwd)) {
+          return {
+            content: [{ type: "text", text: `Project "${params.project_name}" doesn't exist. Create it with create_project first.` }],
+            details: { error: "project_not_found", project_name: params.project_name },
+          };
+        }
         const entry = startServer({
           name: params.name,
           command: params.command,
@@ -897,11 +1325,11 @@ function createListServersTool(): AgentTool<typeof listServersSchema> {
 
 const searchMemorySchema = Type.Object({
   query: Type.String({ description: "Search query — keywords or phrases to find in past conversations" }),
-  limit: Type.Optional(Type.Number({ description: "Max results to return (default: 10, max: 20)" })),
+  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20, description: "Max results to return (1-20, default 10)" })),
   semantic: Type.Optional(Type.Boolean({ description: "Use semantic (vector) search instead of keyword search. Better for conceptual queries. Default: false" })),
   wing: Type.Optional(Type.String({ description: "Filter by wing (entity). E.g., 'user', 'project:blog', 'person:juan'" })),
-  room: Type.Optional(Type.String({ description: "Filter by room (memory type). E.g., 'decisions', 'preferences', 'events', 'facts', 'context'" })),
-  status: Type.Optional(Type.String({ description: "Filter by PARA status: 'project' (active with outcome), 'area' (ongoing), 'resource' (reference), 'archive' (inactive). If omitted, archived items are excluded by default." })),
+  room: Type.Optional(stringEnum(VALID_ROOMS, `Filter by room (memory type). One of: ${VALID_ROOMS.join(", ")}.`)),
+  status: Type.Optional(stringEnum(VALID_STATUSES, `Filter by PARA status: ${VALID_STATUSES.join(", ")}. If omitted, archived items are excluded by default.`)),
   include_archived: Type.Optional(Type.Boolean({ description: "Include archived items in results. Default: false" })),
 });
 
@@ -921,8 +1349,8 @@ function createSearchMemoryTool(configRef?: Config): AgentTool<typeof searchMemo
           const { getMessagesByIds } = await import("./memory.js");
           const filters: { wing?: string; room?: string; status?: string; includeArchived?: boolean } = {};
           if (params.wing) filters.wing = params.wing;
-          if (params.room) filters.room = params.room;
-          if (params.status) filters.status = params.status;
+          if (params.room) filters.room = params.room as string;
+          if (params.status) filters.status = params.status as string;
           if (params.include_archived) filters.includeArchived = true;
 
           const vectorResults = await searchSemantic(params.query, limit, filters);
@@ -1058,8 +1486,8 @@ function createQueryFactsTool(): AgentTool<typeof queryFactsSchema> {
 
 const updateStatusSchema = Type.Object({
   wing: Type.String({ description: "The entity whose memories should be updated (e.g., 'project:blog', 'person:juan')" }),
-  status: Type.String({ description: "New PARA status: 'project' (active with outcome), 'area' (ongoing), 'resource' (reference), 'archive' (completed/cancelled/inactive)" }),
-  room: Type.Optional(Type.String({ description: "Optional: only update memories matching this room (e.g., 'events', 'decisions')" })),
+  status: stringEnum(VALID_STATUSES, `New PARA status. One of: ${VALID_STATUSES.join(", ")}.`),
+  room: Type.Optional(stringEnum(VALID_ROOMS, `Optional: only update memories matching this room. One of: ${VALID_ROOMS.join(", ")}.`)),
 });
 
 function createUpdateStatusTool(): AgentTool<typeof updateStatusSchema> {
@@ -1071,7 +1499,7 @@ function createUpdateStatusTool(): AgentTool<typeof updateStatusSchema> {
     async execute(_id, params) {
       try {
         const { updateStatus } = await import("./vector-memory.js");
-        const count = updateStatus(params.wing, params.status, params.room);
+        const count = updateStatus(params.wing, params.status as string, params.room as string | undefined);
         return {
           content: [{ type: "text", text: `Updated ${count} memories for wing="${params.wing}"${params.room ? `, room="${params.room}"` : ""} → status="${params.status}"` }],
           details: { updated: count },
@@ -1090,10 +1518,10 @@ function createUpdateStatusTool(): AgentTool<typeof updateStatusSchema> {
 
 const completeProjectSchema = Type.Object({
   project_description: Type.String({ description: "A short description identifying the specific project to close (e.g., 'trip to Japan June 2026', 'writing scifi novel', 'blog redesign'). Semantic similarity is used to find only the vectors related to THIS project, leaving other concurrent projects untouched." }),
-  project_slug: Type.Optional(Type.String({ description: "Slug identifying this project's predicates in the knowledge graph (e.g., 'visit_barcelona', 'scifi_novel', 'blog_redesign'). When provided, the handler automatically invalidates every active triple whose predicate contains this slug (e.g., 'scheduled_visit_barcelona', 'planning_visit_barcelona', 'confirmed_visit_barcelona') AND records a single cancellation/completion triple. This replaces the old two-step pattern of calling complete_project then remember_fact — a single call does both." })),
-  reason: Type.Optional(Type.Union([Type.Literal("cancelled"), Type.Literal("completed")], { description: "Why the project is closing. Defaults to 'completed'. Combined with project_slug to form the new triple predicate, e.g. reason='cancelled' + slug='visit_barcelona' → ('user','cancelled_visit_barcelona',<today>)." })),
-  hall: Type.Optional(Type.String({ description: "Optional hall filter to narrow the scope (e.g., 'travel', 'work'). Default: no filter, scans all project-status vectors." })),
-  threshold: Type.Optional(Type.Number({ description: "Similarity threshold 0-1 (default 0.55). Higher = stricter matching. Only vectors above this threshold are affected." })),
+  project_slug: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9_]*$", description: "Slug identifying this project's predicates in the knowledge graph. Lowercase letters, digits, underscores; must start with a letter (e.g., 'visit_barcelona', 'scifi_novel', 'blog_redesign'). When provided, the handler automatically invalidates every active triple whose predicate contains this slug (e.g., 'scheduled_visit_barcelona', 'planning_visit_barcelona', 'confirmed_visit_barcelona') AND records a single cancellation/completion triple. This replaces the old two-step pattern." })),
+  reason: Type.Optional(Type.Union([Type.Literal("cancelled"), Type.Literal("completed")], { description: "Why the project is closing. Defaults to 'completed'. Combined with project_slug to form the new triple predicate (e.g. reason='cancelled' + slug='visit_barcelona' → ('user','cancelled_visit_barcelona',<today>))." })),
+  hall: Type.Optional(stringEnum(VALID_HALLS, `Optional hall filter to narrow the scope. One of: ${VALID_HALLS.join(", ")}.`)),
+  threshold: Type.Optional(Type.Number({ minimum: 0, maximum: 1, description: "Similarity threshold 0-1 (default 0.55). Higher = stricter matching. Only vectors above this threshold are affected." })),
 });
 
 function createCompleteProjectTool(): AgentTool<typeof completeProjectSchema> {
@@ -1108,7 +1536,7 @@ function createCompleteProjectTool(): AgentTool<typeof completeProjectSchema> {
         const { invalidateTriplesByProjectSlug, addTriple } = await import("./knowledge-graph.js");
 
         const vectorResult = await completeProject(params.project_description, {
-          hall: params.hall,
+          hall: params.hall as string | undefined,
           threshold: params.threshold,
         });
 
@@ -1152,6 +1580,218 @@ function createCompleteProjectTool(): AgentTool<typeof completeProjectSchema> {
   };
 }
 
+// ── create_custom_tool ───────────────────────────────────────────────────
+//
+// Typed writer for user-layer custom tools. Avoids two classes of bug:
+//   1. The agent tries to edit src/tools.ts (the core file) instead of
+//      adding a user-layer definition.
+//   2. The agent hand-writes the markdown and gets the parser format
+//      slightly wrong, so the tool never loads.
+// Schema enforces the shape; generator produces a file the parser accepts.
+
+const paramTypeSchema = Type.Union([
+  Type.Literal("string"),
+  Type.Literal("number"),
+  Type.Literal("boolean"),
+]);
+
+const customToolParamSchema = Type.Object({
+  name: Type.String({ pattern: "^[a-z][a-z0-9_]*$", description: "Parameter name (lowercase, letters/digits/underscore)." }),
+  type: paramTypeSchema,
+  required: Type.Boolean(),
+  description: Type.String(),
+  default: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Boolean()], { description: "Default value (only for optional params)." })),
+});
+
+const createCustomToolSchema = Type.Object({
+  name: Type.String({ pattern: "^[a-z][a-z0-9_]*$", description: "Tool name (what the agent calls). Lowercase, letters/digits/underscore, max 40 chars." }),
+  display_name: Type.String({ description: "Human-readable title shown in the custom tools index." }),
+  description: Type.String({ description: "What the tool does and when to use it. Shown to the agent — be concrete." }),
+  command: Type.String({ description: "Shell command. Use $param_name for placeholders — they're substituted with the agent's arguments at call time." }),
+  install: Type.Optional(Type.String({ description: "Optional one-off install/setup command (e.g., 'brew install foo'). Runs once on first load if the dep is missing." })),
+  parameters: Type.Array(customToolParamSchema, { description: "Parameters the agent must/may pass. Names must match the $name placeholders in command." }),
+  overwrite: Type.Optional(Type.Boolean({ description: "Overwrite an existing user-layer tool with the same name. Default: false." })),
+});
+
+const CORE_TOOL_NAMES = new Set([
+  "shell", "read", "write", "ls",
+  "create_project", "list_projects", "delete_project",
+  "create_once_job", "create_cron_job", "list_jobs", "delete_job",
+  "web_search", "web_fetch",
+  "start_server", "stop_server", "list_servers",
+  "search_memory", "remember_fact", "query_facts",
+  "load_skill", "update_memory_status", "complete_project",
+  "run_code_job",
+  "respond_text", "respond_image", "respond_buttons", "respond_shortcut", "respond_html", "respond_sequence",
+
+  "create_custom_tool", "create_user_skill",
+]);
+
+type CustomToolParam = {
+  name: string;
+  type: "string" | "number" | "boolean";
+  required: boolean;
+  description: string;
+  default?: string | number | boolean;
+};
+
+function renderCustomToolMarkdown(params: {
+  name: string;
+  display_name: string;
+  description: string;
+  command: string;
+  install?: string;
+  parameters: CustomToolParam[];
+}): string {
+  const lines: string[] = [];
+  lines.push(`### ${params.display_name}`);
+  lines.push("");
+  lines.push(`Tool name: \`${params.name}\``);
+  lines.push("");
+  lines.push(params.description.trim());
+  lines.push("");
+  if (params.install) {
+    lines.push(`Install: \`${params.install}\``);
+    lines.push("");
+  }
+  lines.push(`Command: \`${params.command}\``);
+  lines.push("");
+  lines.push("Parameters:");
+  for (const p of params.parameters) {
+    const req = p.required ? "required" : "optional";
+    const def = p.default !== undefined && p.default !== null ? `. Default: ${p.default}` : "";
+    lines.push(`- ${p.name} (${p.type}, ${req}): ${p.description.replace(/\.\s*$/, "")}${def}`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+function createCreateCustomToolTool(): AgentTool<typeof createCustomToolSchema> {
+  return {
+    name: "create_custom_tool",
+    label: "Create a user custom tool",
+    description: "Create or overwrite a user-layer custom tool. The tool is stored at data/user/custom-tools/<name>.md, hot-reloaded on next request, and available to the agent immediately. NEVER edit src/tools.ts or any other core file — use this. All parameters map directly to the schema; the tool builds the markdown file for you so the loader always parses it correctly.",
+    parameters: createCustomToolSchema,
+    async execute(_id, params) {
+      const name = params.name;
+      if (CORE_TOOL_NAMES.has(name)) {
+        return {
+          content: [{ type: "text", text: `"${name}" is a core tool name — pick a different one for the user-layer custom tool.` }],
+          details: { error: "reserved_name" },
+        };
+      }
+      // Validate placeholders are declared as parameters.
+      const placeholders = Array.from(params.command.matchAll(/\$([a-z_][a-z0-9_]*)/g)).map((m) => m[1]!);
+      const declared = new Set((params.parameters as CustomToolParam[]).map((p) => p.name));
+      const missing = placeholders.filter((p) => !declared.has(p));
+      if (missing.length > 0) {
+        return {
+          content: [{ type: "text", text: `Command references unknown placeholder(s): ${missing.map((m) => "$" + m).join(", ")}. Declare them as parameters first.` }],
+          details: { error: "unknown_placeholders", missing },
+        };
+      }
+
+      const USER_CT_DIR = resolve(TOOLS_PROJECT_ROOT, "data/user/custom-tools");
+      if (!existsSync(USER_CT_DIR)) mkdirSync(USER_CT_DIR, { recursive: true });
+      const target = join(USER_CT_DIR, `${name}.md`);
+      if (existsSync(target) && !params.overwrite) {
+        return {
+          content: [{ type: "text", text: `User-layer tool "${name}" already exists at ${target}. Pass overwrite: true to replace it, or pick a different name.` }],
+          details: { error: "exists", path: target },
+        };
+      }
+
+      const md = renderCustomToolMarkdown({
+        name: params.name,
+        display_name: params.display_name,
+        description: params.description,
+        command: params.command,
+        install: params.install,
+        parameters: params.parameters as CustomToolParam[],
+      });
+      writeFileSync(target, md);
+      return {
+        content: [{ type: "text", text: `Custom tool "${name}" written to ${target}. It will load on the next request (hot-reload).` }],
+        details: { name, path: target, bytes: md.length },
+      };
+    },
+  };
+}
+
+// ── create_user_skill ────────────────────────────────────────────────────
+//
+// Typed writer for user-layer skills. Same motivation as create_custom_tool:
+// the agent should never hand-craft the frontmatter YAML.
+
+const createUserSkillSchema = Type.Object({
+  name: Type.String({ pattern: "^[a-z][a-z0-9_-]*$", description: "Skill filename (without .md)." }),
+  title: Type.String({ description: "Human-readable title shown in the skills index." }),
+  description: Type.String({ description: "One-line summary of the skill's purpose." }),
+  shortcuts: Type.Optional(Type.Array(Type.String(), { description: "iOS Shortcut names this skill covers. Must match device names exactly." })),
+  target: Type.Optional(Type.Union([Type.Literal("device"), Type.Literal("mac")], { description: "Where the skill's shortcuts run. device (default) = iOS via PocketHook; mac = Mac server via shortcuts://." })),
+  sync_app: Type.Optional(Type.String({ description: "iOS app to nudge after server-side runs (for iCloud sync)." })),
+  body: Type.String({ description: "Markdown body (shortcut definitions, behavior rules, examples). The tool prepends the YAML frontmatter; you just write the body." }),
+  overwrite: Type.Optional(Type.Boolean({ description: "Overwrite an existing user skill with the same name. Default: false." })),
+});
+
+function renderUserSkillMarkdown(params: {
+  name: string;
+  title: string;
+  description: string;
+  shortcuts?: string[];
+  target?: "device" | "mac";
+  sync_app?: string;
+  body: string;
+}): string {
+  const fm: string[] = ["---"];
+  fm.push(`title: ${JSON.stringify(params.title)}`);
+  fm.push(`description: ${JSON.stringify(params.description)}`);
+  if (params.shortcuts && params.shortcuts.length > 0) {
+    fm.push(`shortcuts: [${params.shortcuts.map((s) => JSON.stringify(s)).join(", ")}]`);
+  } else {
+    fm.push(`shortcuts: []`);
+  }
+  if (params.target) fm.push(`target: ${params.target}`);
+  if (params.sync_app) fm.push(`sync_app: ${JSON.stringify(params.sync_app)}`);
+  fm.push("---");
+  fm.push("");
+  return fm.join("\n") + "\n" + params.body.trimEnd() + "\n";
+}
+
+function createCreateUserSkillTool(): AgentTool<typeof createUserSkillSchema> {
+  return {
+    name: "create_user_skill",
+    label: "Create a user skill",
+    description: "Create or overwrite a user-layer skill at data/user/skills/<name>.md. The tool builds the YAML frontmatter from your typed fields, so the loader always parses it correctly. NEVER edit skills/ (core) — use this. Hot-reloaded on next request.",
+    parameters: createUserSkillSchema,
+    async execute(_id, params) {
+      const USER_SK_DIR = resolve(TOOLS_PROJECT_ROOT, "data/user/skills");
+      if (!existsSync(USER_SK_DIR)) mkdirSync(USER_SK_DIR, { recursive: true });
+      const target = join(USER_SK_DIR, `${params.name}.md`);
+      if (existsSync(target) && !params.overwrite) {
+        return {
+          content: [{ type: "text", text: `User skill "${params.name}" already exists at ${target}. Pass overwrite: true to replace it.` }],
+          details: { error: "exists", path: target },
+        };
+      }
+      const md = renderUserSkillMarkdown({
+        name: params.name,
+        title: params.title,
+        description: params.description,
+        shortcuts: params.shortcuts as string[] | undefined,
+        target: params.target as "device" | "mac" | undefined,
+        sync_app: params.sync_app,
+        body: params.body,
+      });
+      writeFileSync(target, md);
+      return {
+        content: [{ type: "text", text: `User skill "${params.name}" written to ${target}. It will load on the next request.` }],
+        details: { name: params.name, path: target, bytes: md.length },
+      };
+    },
+  };
+}
+
 // ── Load skill tool ──────────────────────────────────────────────────────
 
 const loadSkillSchema = Type.Object({
@@ -1189,46 +1829,21 @@ function createLoadSkillTool(): AgentTool<typeof loadSkillSchema> {
   };
 }
 
-// ── Load doc tool ────────────────────────────────────────────────────────
-
-const loadDocSchema = Type.Object({
-  name: Type.String({ description: "Name of the doc to load (filename without extension, e.g. 'settings-reference')" }),
-});
-
-function createLoadDocTool(): AgentTool<typeof loadDocSchema> {
-  return {
-    name: "load_doc",
-    label: "Load documentation",
-    description: "Load the full content of a PocketHook documentation page by name. Call this in two cases: (1) when the user asks about features, settings, API, setup, or product behavior; (2) when you yourself are unsure about how the product works and a doc can resolve the doubt — consult before guessing. The available docs are listed in the 'Available Documentation' section of the system prompt. Always prefer the actual doc over training data.",
-    parameters: loadDocSchema,
-    async execute(_id, params) {
-      try {
-        const { getDocContent, listDocNames } = await import("./config.js");
-        const content = getDocContent(params.name);
-        if (!content) {
-          const available = listDocNames();
-          return {
-            content: [{ type: "text", text: `Doc "${params.name}" not found. Available docs: ${available.join(", ")}` }],
-            details: { error: "not_found" },
-          };
-        }
-        return {
-          content: [{ type: "text", text: content }],
-          details: { name: params.name, size: content.length },
-        };
-      } catch (err: any) {
-        return {
-          content: [{ type: "text", text: `Error loading doc: ${err.message}` }],
-          details: { error: err.message },
-        };
-      }
-    },
-  };
-}
-
 // ── Tool factory ────────────────────────────────────────────────────────
 
-type ToolName = "shell" | "read" | "write" | "ls" | "create_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory" | "remember_fact" | "query_facts" | "load_skill" | "load_doc" | "update_memory_status" | "complete_project";
+type ToolName = "shell" | "read" | "write" | "ls" | "create_project" | "list_projects" | "delete_project" | "create_once_job" | "create_cron_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory" | "remember_fact" | "query_facts" | "load_skill" | "update_memory_status" | "complete_project" | "create_custom_tool" | "create_user_skill";
+
+// Tool names that are added separately (respond sub-tools, run_code_job,
+// custom tools). Permissions may reference them; this set prevents false warnings.
+export const RESPOND_TOOL_NAMES = new Set<string>([
+  "respond", // legacy name for back-compat during migration
+  "respond_text",
+  "respond_image",
+  "respond_buttons",
+  "respond_shortcut",
+  "respond_html",
+  "respond_sequence",
+]);
 
 export function createTools(cwd: string, perms: Permissions, config?: Config): AgentTool<any>[] {
   // Note: config is a live reference — vectorMemoryEnabled may change after Ollama health check
@@ -1237,7 +1852,11 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     read: () => createReadTool(cwd, perms),
     write: () => createWriteTool(cwd, perms),
     ls: () => createLsTool(cwd, perms),
-    create_job: () => createCreateJobTool(),
+    create_project: () => createCreateProjectTool(cwd),
+    list_projects: () => createListProjectsTool(cwd),
+    delete_project: () => createDeleteProjectTool(cwd, perms),
+    create_once_job: () => createOnceJobTool(),
+    create_cron_job: () => createCronJobTool(),
     list_jobs: () => createListJobsTool(),
     delete_job: () => createDeleteJobTool(),
     web_search: () => createWebSearchTool(config!),
@@ -1249,9 +1868,10 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     remember_fact: () => createRememberFactTool(),
     query_facts: () => createQueryFactsTool(),
     load_skill: () => createLoadSkillTool(),
-    load_doc: () => createLoadDocTool(),
     update_memory_status: () => createUpdateStatusTool(),
     complete_project: () => createCompleteProjectTool(),
+    create_custom_tool: () => createCreateCustomToolTool(),
+    create_user_skill: () => createCreateUserSkillTool(),
   };
 
   const tools: AgentTool<any>[] = [];
@@ -1259,10 +1879,13 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     const factory = factories[name as ToolName];
     if (factory) {
       tools.push(factory());
-    } else if (name !== "respond") {
+    } else if (!RESPOND_TOOL_NAMES.has(name)) {
       logger.warn(`Unknown tool: ${name}`);
     }
   }
+
+
+
 
   // Append custom tools (hot-reloaded from custom-tools/*.md)
   const customTools = getCustomTools(cwd);

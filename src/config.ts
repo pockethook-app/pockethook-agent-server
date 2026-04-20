@@ -38,6 +38,7 @@ export interface Config {
 // ── Base system prompt (fixed, loaded once) ─────────────────────────────
 
 function buildBaseSystemPrompt(agentName: string, vectorMemoryEnabled: boolean, userName?: string, onboardingChat: boolean = false): string {
+  const workingDir = join(PROJECT_ROOT, "workspace");
   const baseSkillsDir = join(PROJECT_ROOT, "skills");
   const userSkillsDir = join(PROJECT_ROOT, "data", "user", "skills");
   const baseCustomToolsDir = join(PROJECT_ROOT, "custom-tools");
@@ -67,34 +68,27 @@ If the user declines, respect it immediately with something short like "No probl
 IMPORTANT: Only offer this ONCE. Before offering, check \`query_facts("user")\` — if you already have personal facts about the user (work, location, family, hobbies) OR if they previously declined, do NOT offer again.` : "";
   return `Your name is ${agentName}. You are a helpful AI assistant integrated with PocketHook, an iOS automation app.${userNameLine}
 
-You have access to tools for interacting with the server and a special "respond" tool to send your final answer.
+You have access to tools for interacting with the server, plus a family of **respond_*** tools to send your reply to the user's PocketHook iOS app.
 
-IMPORTANT: You MUST always call the "respond" tool to deliver your response. This is the only way to send messages to the PocketHook app.
+IMPORTANT: you MUST deliver your reply by calling exactly ONE of the respond_* tools. Never return plain text without a respond_* call.
 
-## respond tool format
+## Respond tools (pick the right one)
 
-Each step has:
-- msg (required): Message to display to the user
-- shortcut (optional): iOS Shortcut name to trigger on the user's device
-- data (optional): JSON data to pass to the shortcut — ALWAYS include this when triggering a shortcut. The shortcut receives this data as input.
-- url (optional): HTTPS URL to attach. Used as the primary clickable link on the device.
-- run_on (optional): Where to execute the shortcut: "server" (on the Mac server) or "device" (on the iOS device, default). Use "server" ONLY for shortcuts from skills with [target: mac] in the skills index.
+- \`respond_text({ text })\` — plain text or Markdown. Default choice for a regular reply.
+- \`respond_image({ url })\` — send an image. The URL IS the entire message; it must start with \`https\` and end in \`.png/.jpg/.jpeg/.gif/.webp\` (querystrings allowed). Do NOT include a caption — iOS only renders the image when the msg is the bare URL.
+- \`respond_buttons({ msg, buttons })\` — message with 1–5 interactive buttons. Each button has label + action (\`sendMessage\` | \`openURL\` | \`triggerShortcut\`) + value. The tool formats the \`Button:\` syntax; you never write it by hand.
+- \`respond_shortcut({ msg, shortcut_name, data?, run_on? })\` — trigger an iOS Shortcut. \`shortcut_name\` must match EXACTLY. Put the payload in \`data\`, not \`msg\`. Use \`run_on: "server"\` only for skills with \`target: mac\`.
+- \`respond_html({ html })\` — rich HTML content. Auto-wraps in \`<div>\` if you forget the prefix.
+- \`respond_sequence({ steps })\` — chain multiple text/buttons/shortcut steps. iOS **concatenates** all messages into ONE bubble with bullets and runs shortcuts in order. Use only when you genuinely need chained shortcuts; otherwise prefer a single respond_text. Image and HTML steps are not allowed in sequences (iOS can't render them when concatenated).
 
-The \`msg\` field renders plain text, markdown, inline HTML (wrapped in a \`<div>\`), inline images, and interactive buttons. When the user has a choice between options, always offer buttons — never make them type a selection manually. For full rendering details (HTML rules, image URL constraints, button action types and syntax), call \`load_doc("content-rendering")\`.
+### Key constraints (enforced by schemas)
 
-### Simple examples
-
-\`respond({ steps: [{ msg: "Here are 10 cat breeds..." }] })\`
-
-\`respond({ steps: [{ msg: "Creating your note...", shortcut: "New Note", data: { title: "Cat Breeds", content: "..." } }] })\`
-
-### Data and URL rules
-
-- When triggering a shortcut, ALWAYS put the real payload in \`data\`. The shortcut can't read \`msg\`.
-- Keep \`msg\` short (status for the user). Put content in \`data\`.
-- If the user explicitly asks to open a website, put the URL in the \`url\` field — PocketHook opens it on the device.
-- When you include a link to a server you started, use its tunnel URL. Localhost URLs never reach the user's phone; the server rewrites obvious leaks and logs a warning, but rely on \`start_server({ tunnel: true })\` up front.
-- If the user asks to run a specific shortcut that isn't in the available-skills list, tell them it's not configured and show what IS available.
+- **Images** must be in their own respond_image call. You cannot combine an image with any other text in the same turn — iOS breaks the render if there's any prefix/suffix.
+- **Buttons** syntax is built by the tool. Never put \`Button: …\` lines inside respond_text.
+- **Shortcuts** — always put the real payload in \`data\`, keep \`msg\` short (it's a status line the user sees).
+- **URLs** — when you include a link to a dev server you started, use its tunnel URL. Localhost URLs never reach the phone; the server rewrites obvious leaks and logs a warning, but rely on \`start_server({ tunnel: true })\` up front.
+- **Unknown shortcut** — if the user asks for a shortcut not present in the skills index, say it isn't configured and list what IS available; do NOT invent a shortcut_name.
+- **Choices** — whenever you present a choice between options, use \`respond_buttons\`, never ask the user to type a selection manually.
 
 ## Memory
 
@@ -111,9 +105,7 @@ You have long-term memory across conversations. Relevant past messages are autom
 **Rules of thumb:**
 - Store facts BEFORE executing tasks. If the user says "my mother lives in London, create me a note...", FIRST \`remember_fact({subject: "Sarah", predicate: "lives_in", object: "London"})\`, THEN create the note.
 - Use unique slugged predicates per project (\`scheduled_visit_barcelona\`, not \`scheduled_visit\`) so concurrent projects don't overwrite each other.
-- Multi-value predicates (child, friend, hobby, language, skill, pet) — call \`remember_fact\` once per value.
-
-For what/what-not-to-store, format conventions, and advanced patterns, call \`load_doc("memory-guide")\`.` : ""}
+- Multi-value predicates (child, friend, hobby, language, skill, pet) — call \`remember_fact\` once per value.` : ""}
 
 ## Skills
 
@@ -126,29 +118,45 @@ The runtime separates **framework files** (shipped with the repo, read-only for 
 - READ-ONLY base (never create, edit, or delete):
   - \`${baseSkillsDir}\` — framework-shipped skills
   - \`${baseCustomToolsDir}\` — framework-shipped custom tool templates
-  - \`${join(PROJECT_ROOT, "agent-instructions.md")}\` — base agent instructions
+  - \`${join(PROJECT_ROOT, "config", "agent-instructions.md")}\` — base agent instructions
 - WRITABLE user layer (this is where all user customization lives):
   - \`${userSkillsDir}\` — user-authored skills (overrides base on filename collision)
   - \`${userCustomToolsDir}\` — user-installed custom tools
   - \`${userInstructionsPath}\` — user additions to agent instructions. Put global behavior rules here ("always reply in English", "never use tables").
   - \`${userPrefsPath}\` — typed user values (route origin, tunnel domain, preferred app). Skills reference these as \`{{prefs.key}}\` and the server substitutes at load time.
 
-**Write rule**: any time the user asks to add, edit, or remove a skill, rule, preference, or custom tool, the write goes to the user layer — never to the base. If the user wants to modify a skill that only exists in the base, copy it to \`${userSkillsDir}\` first and edit the copy; the user-layer file wins on reload.
-
-For skill file format (frontmatter, body, authoring flow) call \`load_doc("skills-format")\`. For custom tool file format call \`load_doc("custom-tools-format")\`.
+**Write rule**: any time the user asks to add, edit, or remove a skill, rule, preference, or custom tool, the write goes to the user layer — never to the base. Use the dedicated tools \`create_user_skill\` (writes to \`${userSkillsDir}\`) and \`create_custom_tool\` (writes to \`${userCustomToolsDir}\`) — they build the file with the correct format. Never hand-write skill or custom-tool files.
 
 ## Workspace
 
-Your working directory is \`workspace/\`. Create subfolders for each project (\`workspace/my-blog/\`, \`workspace/notes/\`) — never loose files in the root.
+Your current working directory is the \`workspace/\` folder (absolute path: \`${workingDir}\`). This is where you create your own projects and files — it is NOT the PocketHook source code repository.
 
-\`workspace/dashboard/\` is the user's personal \`/dashboard\` web page. For customization details, call \`load_doc("dashboard")\`.
+### Project management (typed tools — ALWAYS use these)
+
+- \`create_project({ name, template? })\` — create a new workspace project. \`name\` is just the project name (lowercase, letters/digits/_-). The path is resolved automatically to \`${workingDir}/<name>/\`. NEVER build paths manually.
+- \`list_projects()\` — list existing projects.
+- \`delete_project({ name, confirm: true })\` — delete a project. Ask the user for confirmation first.
+- \`run_code_job({ task, project_name? })\` — run a programming task. \`project_name\` is the name only (same regex). Omit to use the workspace root. The project is auto-created if it doesn't exist.
+- \`start_server({ name, command, project_name, tunnel? })\` — serve a project; same rule.
+
+Never pass things like \`"workspace/foo"\` or absolute paths into \`project_name\` — schemas reject them.
+
+### Working on the PocketHook source code
+
+If you need to touch the monorepo source (server, iOS app, web) — NOT a workspace project — use \`shell\` / \`read\` / \`write\` directly with absolute paths. Don't try to squeeze source-code edits through the workspace tools.
+
+### What lives here
+
+\`workspace/\` is for agent-created projects (integrations, prototypes, scripts). Use \`list_projects\` before creating to avoid name collisions.
+
+\`dashboard/\` is the user's personal \`/dashboard\` web page. Edit its files directly if the user asks to customize it.
 
 ## Running things
 
 - **Programming tasks** (create project, review code, build, test, debug, refactor) → always \`run_code_job\`. One call creates the background job and sends the ack to the user. Do NOT use \`shell\`/\`read\`/\`write\` inline for heavy code work; PocketHook's HTTP request has a short timeout.
-- **Serving a dev project for the user to view** → \`start_server\` with \`tunnel: true\`. For framework-specific commands and binding rules, call \`load_doc("serving-projects")\`.
-- **Deep research, multi-page scraping, long reports** → \`create_job\` with \`execution_type: "prompt"\`. Respond immediately; the user is notified when the job finishes.
-- **Recurring tasks** ("every day at 8am", "weekly on Mondays") → \`create_job\` with \`type: "cron"\` and the appropriate schedule.
+- **Serving a dev project for the user to view** → \`start_server\` with \`tunnel: true\`. Always bind dev commands to \`0.0.0.0\` / \`--host\` so external requests can reach them.
+- **Deep research, multi-page scraping, long reports** → \`create_once_job\` with \`body: { kind: "prompt", prompt: "..." }\`. Respond immediately; the user is notified when the job finishes.
+- **Recurring tasks** ("every day at 8am", "weekly on Mondays") → \`create_cron_job\` with \`schedule: { kind: "interval", value: "5m" }\` or \`schedule: { kind: "cron", expression: "0 9 * * MON" }\`.
 - **Quick operations** (simple questions, single search, reading one file the user asked about, listing jobs/servers, starting/stopping servers) → answer inline.
 - If your message starts with \`[BACKGROUND JOB]\`, you are already running inside one — do the work directly, do not create more jobs.
 
@@ -173,7 +181,7 @@ let cachedUserName: string | undefined;
 
 // ── Personality (hot-reloaded from personality.md) ──────────────────────
 
-const PERSONALITY_PATH = join(PROJECT_ROOT, "personality.md");
+const PERSONALITY_PATH = join(PROJECT_ROOT, "config", "personality.md");
 let cachedPersonality: string = "";
 let cachedPersonalityMtime: number = 0;
 
@@ -208,7 +216,7 @@ function getPersonality(): string {
 
 // ── Agent instructions (hot-reloaded from agent-instructions.md) ────────
 
-const INSTRUCTIONS_PATH = join(PROJECT_ROOT, "agent-instructions.md");
+const INSTRUCTIONS_PATH = join(PROJECT_ROOT, "config", "agent-instructions.md");
 let cachedInstructions: string = "";
 let cachedInstructionsMtime: number = 0;
 
@@ -336,7 +344,7 @@ export function interpolatePrefs(text: string): string {
 // ── User customization paths ────────────────────────────────────────────
 //
 // Base directories (shipped with the repo, treated as read-only by the agent):
-//   skills/ , custom-tools/ , agent-instructions.md
+//   skills/ , custom-tools/ , config/agent-instructions.md , config/personality.md
 //
 // User-local directories (under data/, git-ignored, written by the agent):
 //   data/user/skills/           — user-authored skills override base on name collision
@@ -395,7 +403,7 @@ function getSkillsMaxMtime(): number {
  *    ---
  * 2. Auto-extracted: ### Title (line 1) + first paragraph as description
  */
-function parseSkillMeta(filename: string, content: string): SkillMeta & { shortcuts?: string[]; target?: "mac" | "device"; syncApp?: string } {
+function parseSkillMeta(filename: string, content: string): SkillMeta & { shortcuts?: string[]; target?: "mac" | "device"; syncApp?: string; enabled?: boolean } {
   const name = filename.replace(/\.(md|txt)$/, "");
 
   // Try frontmatter
@@ -407,6 +415,7 @@ function parseSkillMeta(filename: string, content: string): SkillMeta & { shortc
     const shortcutsMatch = fm.match(/^shortcuts:\s*\[([^\]]+)\]/m);
     const targetMatch = fm.match(/^target:\s*(.+)$/m);
     const syncAppMatch = fm.match(/^sync_app:\s*(.+)$/m);
+    const enabledMatch = fm.match(/^enabled:\s*(.+)$/m);
     if (descMatch) {
       const shortcuts = shortcutsMatch
         ? shortcutsMatch[1]!.split(",").map((s) => s.trim()).filter(Boolean)
@@ -415,6 +424,8 @@ function parseSkillMeta(filename: string, content: string): SkillMeta & { shortc
       const target: "mac" | "device" | undefined = rawTarget === "mac" ? "mac" : rawTarget === "device" ? "device" : undefined;
       const rawSyncApp = syncAppMatch?.[1]?.trim();
       const syncApp = rawSyncApp && rawSyncApp.toLowerCase() !== "none" ? rawSyncApp : undefined;
+      const rawEnabled = enabledMatch?.[1]?.trim().toLowerCase();
+      const enabled = rawEnabled === "false" ? false : undefined;
       return {
         name,
         file: filename,
@@ -423,6 +434,7 @@ function parseSkillMeta(filename: string, content: string): SkillMeta & { shortc
         shortcuts,
         target,
         syncApp,
+        enabled,
       };
     }
   }
@@ -486,6 +498,7 @@ function loadSkillsIndex(): string {
       for (const file of files) {
         const content = readFileSync(join(dir, file), "utf-8");
         const meta = parseSkillMeta(file, content);
+        if (meta.enabled === false) continue;
         cachedSkillsMap.set(meta.name, {
           file,
           dir,
@@ -574,118 +587,6 @@ export function getSyncAppForShortcut(shortcutName: string): string | undefined 
   return meta?.syncApp;
 }
 
-// ── Docs (hot-reloaded from docs/ directory) ────────────────────────────
-
-export const DOCS_DIR = join(PROJECT_ROOT, "docs");
-let cachedDocsIndex: string = "";
-let cachedDocsMtime: number = 0;
-let cachedDocsMap: Map<string, { file: string; title: string; description: string }> = new Map();
-
-export interface DocMeta {
-  name: string;
-  file: string;
-  title: string;
-  description: string;
-}
-
-/**
- * Get the latest mtime across all files in docs/.
- */
-function getDocsMaxMtime(): number {
-  if (!existsSync(DOCS_DIR)) return 0;
-  let maxMtime = 0;
-  try {
-    const files = readdirSync(DOCS_DIR).filter((f) => f.endsWith(".md"));
-    for (const file of files) {
-      const mtime = statSync(join(DOCS_DIR, file)).mtimeMs;
-      if (mtime > maxMtime) maxMtime = mtime;
-    }
-  } catch {}
-  return maxMtime;
-}
-
-/**
- * Parse a doc file's frontmatter.
- * Expected format:
- *   ---
- *   title: "Settings Reference"
- *   description: "Complete reference for every setting..."
- *   ---
- * Falls back to filename + empty description if frontmatter is missing.
- */
-function parseDocMeta(filename: string, content: string): DocMeta {
-  const name = filename.replace(/\.md$/, "");
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  if (fmMatch) {
-    const fm = fmMatch[1]!;
-    const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m);
-    const descMatch = fm.match(/^description:\s*["']?(.+?)["']?\s*$/m);
-    return {
-      name,
-      file: filename,
-      title: titleMatch?.[1]?.trim() ?? name,
-      description: descMatch?.[1]?.trim() ?? "",
-    };
-  }
-  return { name, file: filename, title: name, description: "" };
-}
-
-/**
- * Load doc metadata index from docs/ directory.
- * Returns a short index for the system prompt and populates the cache map.
- */
-function loadDocsIndex(): string {
-  cachedDocsMap.clear();
-  if (!existsSync(DOCS_DIR)) return "";
-  try {
-    const files = readdirSync(DOCS_DIR)
-      .filter((f) => f.endsWith(".md"))
-      .sort();
-    if (files.length === 0) return "";
-
-    const entries: string[] = [];
-    for (const file of files) {
-      const content = readFileSync(join(DOCS_DIR, file), "utf-8");
-      const meta = parseDocMeta(file, content);
-      cachedDocsMap.set(meta.name, { file, title: meta.title, description: meta.description });
-      const desc = meta.description ? `: ${meta.description}` : "";
-      entries.push(`- **${meta.name}** — ${meta.title}${desc}`);
-    }
-
-    return (
-      "\n\n## Available Documentation\n\n" +
-      "Use the `load_doc` tool to read the full content of a documentation page in two situations:\n" +
-      "1. **When the user asks** about PocketHook features, settings, API, setup, or any product behavior — load the relevant doc and answer from it rather than from training data.\n" +
-      "2. **When you yourself are unsure** about how the product works, how a setting interacts with others, what the protocol expects, or what a shortcut/intent does — consult the docs before acting or answering. Do not guess if a doc can resolve your doubt.\n\n" +
-      "Always prefer the actual doc over training data — PocketHook-specific details may be recent or specific to this deployment.\n\n" +
-      entries.join("\n")
-    );
-  } catch {
-    return "";
-  }
-}
-
-/**
- * Get the full content of a doc by name.
- * Used by the load_doc tool.
- */
-export function getDocContent(name: string): string | null {
-  const meta = cachedDocsMap.get(name);
-  if (!meta) return null;
-  try {
-    return readFileSync(join(DOCS_DIR, meta.file), "utf-8");
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Get all doc names (for the load_doc tool's error message).
- */
-export function listDocNames(): string[] {
-  return [...cachedDocsMap.keys()];
-}
-
 /**
  * Get the full system prompt: base (fixed) + skills (hot-reloaded on change).
  */
@@ -738,16 +639,7 @@ export function getSystemPrompt(agentName: string, vectorMemoryEnabled: boolean 
     }
   }
 
-  const currentDocsMtime = getDocsMaxMtime();
-  if (currentDocsMtime !== cachedDocsMtime) {
-    cachedDocsIndex = loadDocsIndex();
-    cachedDocsMtime = currentDocsMtime;
-    if (cachedDocsIndex) {
-      logger.info(`Docs reloaded (${cachedDocsMap.size} file(s))`);
-    }
-  }
-
-  return BASE_SYSTEM_PROMPT + getPersonality() + formatCurrentDate() + cachedLocalePrompt + getInstructions() + getUserInstructions() + cachedSkillsIndex + cachedDocsIndex + getCustomToolsPrompt();
+  return BASE_SYSTEM_PROMPT + getPersonality() + formatCurrentDate() + cachedLocalePrompt + getInstructions() + getUserInstructions() + cachedSkillsIndex + getCustomToolsPrompt();
 }
 
 // ── Config ──────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ import { DEFAULT_PERMISSIONS, loadPermissions, savePermissions, permissionsPath,
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ENV_PATH = join(PROJECT_ROOT, ".env");
-const PERSONALITY_PATH = join(PROJECT_ROOT, "personality.md");
+const PERSONALITY_PATH = join(PROJECT_ROOT, "config", "personality.md");
 
 // ── Banner ───────────────────────────────────────────────────────────────
 
@@ -674,7 +674,11 @@ async function configurePermissions() {
       { value: "read", label: "read", hint: "Read files" },
       { value: "write", label: "write", hint: "Write files" },
       { value: "ls", label: "ls", hint: "List directories" },
-      { value: "create_job", label: "create_job", hint: "Create background jobs" },
+      { value: "create_project", label: "create_project", hint: "Create a new workspace project (typed, name-only)" },
+      { value: "list_projects", label: "list_projects", hint: "List workspace projects" },
+      { value: "delete_project", label: "delete_project", hint: "Delete a workspace project (needs confirm: true)" },
+      { value: "create_once_job", label: "create_once_job", hint: "Create a one-off background job (shell or prompt)" },
+      { value: "create_cron_job", label: "create_cron_job", hint: "Create a recurring background job (interval or cron)" },
       { value: "list_jobs", label: "list_jobs", hint: "List background jobs" },
       { value: "delete_job", label: "delete_job", hint: "Delete background jobs" },
       { value: "web_search", label: "web_search", hint: "Search the web" },
@@ -682,9 +686,10 @@ async function configurePermissions() {
       { value: "remember_fact", label: "remember_fact", hint: "Store facts in knowledge graph (requires semantic memory)" },
       { value: "query_facts", label: "query_facts", hint: "Query facts from knowledge graph (requires semantic memory)" },
       { value: "load_skill", label: "load_skill", hint: "Load full content of a skill on demand (recommended)" },
-      { value: "load_doc", label: "load_doc", hint: "Load PocketHook documentation on demand (recommended)" },
       { value: "update_memory_status", label: "update_memory_status", hint: "Change PARA status of memories (project/area/resource/archive)" },
       { value: "complete_project", label: "complete_project", hint: "Close a project: archive events, keep resources (PARA transition)" },
+      { value: "create_custom_tool", label: "create_custom_tool", hint: "Create a user-layer custom tool (typed writer)" },
+      { value: "create_user_skill", label: "create_user_skill", hint: "Create a user-layer skill (typed writer)" },
     ],
     initialValues: current.tools,
     required: false,
