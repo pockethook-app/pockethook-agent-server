@@ -288,28 +288,48 @@ Bun.serve({
     // Direct delivery: if fetchPendingTasks and there are completed jobs, respond immediately without LLM
     const undelivered = getUndeliveredResults();
     if (undelivered.length > 0 && chatInput.toLowerCase().includes(config.fetchMessage)) {
+      const IMAGE_URL_RE = /^https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?$/i;
+      const extractDirectImageUrl = (value: unknown): string | null => {
+        if (typeof value !== "string") return null;
+        const trimmed = value.trim();
+        if (IMAGE_URL_RE.test(trimmed)) return trimmed;
+        return null;
+      };
       const jobResponses: { msg: string; shortcut?: string; data?: Record<string, unknown>; url?: string }[] = [];
 
       for (const j of undelivered) {
-        if (j.status === "completed" && j.result) {
+        if (j.result) {
           // Try to parse as PocketHook response JSON (from prompt-type jobs)
           try {
             const parsed = JSON.parse(j.result);
             if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].msg) {
               for (const step of parsed) {
-                jobResponses.push({
-                  msg: step.msg,
-                  shortcut: step.shortcut,
-                  data: step.data,
-                  url: step.url,
-                });
+                const imageMsg = extractDirectImageUrl(step?.msg);
+                if (imageMsg) {
+                  jobResponses.push({ msg: imageMsg });
+                } else {
+                  jobResponses.push({
+                    msg: step.msg,
+                    shortcut: step.shortcut,
+                    data: step.data,
+                    url: step.url,
+                  });
+                }
               }
               continue;
             }
           } catch {
             // Not JSON — treat as plain text (expected for shell job output)
           }
-          // Shell job or non-JSON result — wrap with optional shortcut
+          // Shell job or non-JSON result — wrap with optional shortcut.
+          // If the whole result is already a direct image URL with a valid extension,
+          // preserve it as-is so iOS can render the inline image.
+          const imageResult = extractDirectImageUrl(j.result);
+          if (imageResult) {
+            jobResponses.push({ msg: imageResult });
+            continue;
+          }
+
           let data: Record<string, unknown> | undefined;
           if (j.on_complete_data) {
             try {

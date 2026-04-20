@@ -171,3 +171,24 @@ describe("nextRunFromSchedule", () => {
     expect(nextRunFromSchedule("invalid")).toBeNull();
   });
 });
+
+describe("job delivery visibility", () => {
+  const hasUndelivered = (job: { delivered: number; result: string | null; error: string | null }) =>
+    job.delivered === 0 && (job.result !== null || job.error !== null);
+
+  test("cron job with pending status and undelivered result is still deliverable", () => {
+    expect(hasUndelivered({ delivered: 0, result: "ok", error: null })).toBe(true);
+  });
+
+  test("cron job with pending status and undelivered error is still deliverable", () => {
+    expect(hasUndelivered({ delivered: 0, result: null, error: "boom" })).toBe(true);
+  });
+
+  test("delivered jobs are excluded even if they keep latest output", () => {
+    expect(hasUndelivered({ delivered: 1, result: "ok", error: null })).toBe(false);
+  });
+
+  test("jobs without result or error are excluded", () => {
+    expect(hasUndelivered({ delivered: 0, result: null, error: null })).toBe(false);
+  });
+});

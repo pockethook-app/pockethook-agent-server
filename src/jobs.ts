@@ -376,7 +376,7 @@ export function updateJobEnabled(id: number, enabled: boolean): boolean {
 export function hasUndeliveredResults(): boolean {
   const d = getDb();
   const row = d.query(
-    "SELECT COUNT(*) as count FROM jobs WHERE (status = 'completed' OR status = 'failed') AND delivered = 0",
+    "SELECT COUNT(*) as count FROM jobs WHERE delivered = 0 AND (result IS NOT NULL OR error IS NOT NULL)",
   ).get() as { count: number };
   return row.count > 0;
 }
@@ -384,7 +384,7 @@ export function hasUndeliveredResults(): boolean {
 export function getUndeliveredResults(): Job[] {
   const d = getDb();
   return d.query(
-    "SELECT * FROM jobs WHERE (status = 'completed' OR status = 'failed') AND delivered = 0 ORDER BY completed_at ASC",
+    "SELECT * FROM jobs WHERE delivered = 0 AND (result IS NOT NULL OR error IS NOT NULL) ORDER BY completed_at ASC",
   ).all() as Job[];
 }
 
@@ -510,11 +510,13 @@ async function schedulerTick(): Promise<void> {
       const deliveredFlag = (job as any).silent ? 1 : 0;
 
       if (job.type === "cron" && job.schedule) {
-        // Reschedule cron job
+        // Reschedule cron job while preserving the latest run output for delivery.
+        // Keep status pending so the scheduler can run again, but /jobs and
+        // fetchPendingTasks must still see undelivered result/error payloads.
         const nextRun = nextRunFromSchedule(job.schedule, new Date(completedAt));
         if (nextRun) {
           d.run(
-            `UPDATE jobs SET status = 'pending', ${resultField} = ?, completed_at = ?, next_run_at = ?, delivered = ? WHERE id = ?`,
+            `UPDATE jobs SET status = 'pending', ${resultField} = ?, ${resultField === "result" ? "error = NULL," : "result = NULL,"} completed_at = ?, next_run_at = ?, delivered = ? WHERE id = ?`,
             [output || null, completedAt, nextRun, deliveredFlag, job.id],
           );
         } else {
