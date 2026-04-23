@@ -19,11 +19,15 @@ import { fileURLToPath } from "url";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { loadConfig } from "./config.js";
+import { escapeRegex, getInstanceName, toPascalCase } from "./instance.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DATA_DIR = join(PROJECT_ROOT, "data");
 const META_PATH = join(DATA_DIR, "service.json");
 const PLATFORM = process.platform;
+
+const INSTANCE_NAME = getInstanceName();
+const LOG_DIR_NAME = `pockethook-${INSTANCE_NAME}`;
 
 // ── Service metadata ─────────────────────────────────────────────────────
 
@@ -92,7 +96,7 @@ function readEnvPort(): number {
 
 // ── macOS (launchd) ──────────────────────────────────────────────────────
 
-const LAUNCHD_LABEL = "com.pockethook.agent-server";
+const LAUNCHD_LABEL = `com.pockethook.${INSTANCE_NAME}`;
 const LAUNCHD_PLIST = join(
   process.env.HOME || "~",
   "Library",
@@ -104,7 +108,7 @@ function getLogDir(): string {
   // Use ~/Library/Logs for macOS (always available, even for external drives)
   // Use DATA_DIR for other platforms
   if (PLATFORM === "darwin") {
-    const logDir = join(process.env.HOME || "~", "Library", "Logs", "pockethook-agent-server");
+    const logDir = join(process.env.HOME || "~", "Library", "Logs", LOG_DIR_NAME);
     if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
     return logDir;
   }
@@ -169,7 +173,7 @@ function macStop(): void {
   // Kill any orphaned bun processes from --watch
   try {
     const pids = execSync(
-      `pgrep -f "bun.*pockethook-agent-server/src/index.ts"`,
+      `pgrep -f "bun.*${escapeRegex(PROJECT_ROOT)}/src/index\\.ts"`,
       { encoding: "utf-8" },
     ).trim();
     if (pids) {
@@ -208,7 +212,7 @@ function macStatus(): string {
 
 // ── Linux (systemd) ──────────────────────────────────────────────────────
 
-const SYSTEMD_NAME = "pockethook-agent-server";
+const SYSTEMD_NAME = `pockethook-${INSTANCE_NAME}`;
 const SYSTEMD_USER_DIR = join(process.env.HOME || "~", ".config", "systemd", "user");
 const SYSTEMD_UNIT = join(SYSTEMD_USER_DIR, `${SYSTEMD_NAME}.service`);
 
@@ -279,7 +283,7 @@ function linuxStatus(): string {
 
 // ── Windows (NSSM) ──────────────────────────────────────────────────────
 
-const NSSM_NAME = "PocketHookAgentServer";
+const NSSM_NAME = `PocketHook-${toPascalCase(INSTANCE_NAME)}`;
 
 function winInstall(): void {
   if (!commandExists("nssm")) {

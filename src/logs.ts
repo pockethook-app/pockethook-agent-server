@@ -7,13 +7,15 @@ import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { getInstanceName } from "./instance.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DATA_DIR = join(PROJECT_ROOT, "data");
 const PLATFORM = process.platform;
+const INSTANCE_NAME = getInstanceName();
 
 if (PLATFORM === "darwin") {
-  const logDir = join(process.env.HOME || "~", "Library", "Logs", "pockethook-agent-server");
+  const logDir = join(process.env.HOME || "~", "Library", "Logs", `pockethook-${INSTANCE_NAME}`);
   const stdout = join(logDir, "service.stdout.log");
   const stderr = join(logDir, "service.stderr.log");
 
@@ -27,7 +29,7 @@ if (PLATFORM === "darwin") {
   execSync(`tail -n 50 -f ${files.join(" ")}`, { stdio: "inherit" });
 } else if (PLATFORM === "linux") {
   try {
-    execSync("journalctl --user -u pockethook-agent-server -f --no-pager", { stdio: "inherit" });
+    execSync(`journalctl --user -u pockethook-${INSTANCE_NAME} -f --no-pager`, { stdio: "inherit" });
   } catch {
     // Fallback to log files if journalctl is not available
     const stdout = join(DATA_DIR, "service.stdout.log");
