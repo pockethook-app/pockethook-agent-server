@@ -482,8 +482,21 @@ async function setup() {
     } else if (embeddingProvider === "lm-studio") {
       p.log.info(`Load an embedding model in LM Studio before starting the server.`);
     }
+
+    const maxRecall = await p.text({
+      message: "Memories to recall per turn (semantic search)",
+      initialValue: env.MAX_RECALL || "5",
+      placeholder: "5",
+      validate: (v) => {
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < 0 || n > 50) return "Must be an integer between 0 and 50.";
+      },
+    });
+    if (p.isCancel(maxRecall)) cancelled();
+    env.MAX_RECALL = String(maxRecall);
   } else {
     env.VECTOR_MEMORY = "false";
+    delete env.MAX_RECALL;
     delete env.EMBEDDING_PROVIDER;
     delete env.EMBEDDING_URL;
     delete env.EMBEDDING_MODEL;
@@ -778,6 +791,48 @@ if (process.argv.includes("--personality")) {
   });
 } else if (process.argv.includes("--refresh")) {
   refreshToken().catch((err) => {
+    p.log.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+} else if (process.argv.includes("--memory")) {
+  (async () => {
+    console.clear();
+    console.log(BANNER);
+    p.intro(pc.bgYellow(pc.black(" memory ")));
+
+    const env = readEnv();
+
+    const maxHistory = await p.text({
+      message: "Short-term window size (messages kept in RAM per session)",
+      initialValue: env.MAX_HISTORY || "50",
+      placeholder: "50",
+      validate: (v) => {
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < 1 || n > 2000) return "Must be an integer between 1 and 2000.";
+      },
+    });
+    if (p.isCancel(maxHistory)) cancelled();
+    env.MAX_HISTORY = String(maxHistory);
+
+    if (env.VECTOR_MEMORY === "true") {
+      const maxRecall = await p.text({
+        message: "Memories to recall per turn (semantic search)",
+        initialValue: env.MAX_RECALL || "5",
+        placeholder: "5",
+        validate: (v) => {
+          const n = Number(v);
+          if (!Number.isInteger(n) || n < 0 || n > 50) return "Must be an integer between 0 and 50.";
+        },
+      });
+      if (p.isCancel(maxRecall)) cancelled();
+      env.MAX_RECALL = String(maxRecall);
+    } else {
+      p.log.info(pc.dim("Semantic memory disabled — recall settings skipped. Run `bun run setup` to enable it."));
+    }
+
+    writeEnv(env);
+    p.outro(pc.green("Done!") + " Restart the server to apply.");
+  })().catch((err) => {
     p.log.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   });

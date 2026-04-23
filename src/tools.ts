@@ -1,8 +1,16 @@
 /**
  * Agent tools with granular permission enforcement.
  *
- * Permissions are checked before each tool execution.
- * Denied operations return an error result (the agent sees it and can adjust).
+ * DO NOT ADD NEW INTEGRATIONS HERE.
+ * User/personal integrations live in the extension layer, never in this file:
+ *   - Shell/CLI wrapper → create_custom_tool (writes data/user/custom-tools/*.md)
+ *   - Behavior or iOS Shortcut → create_user_skill (writes data/user/skills/*.md)
+ *   - Multi-file project → workspace/<name>/, invoked from a custom-tool
+ * Only framework-level primitives belong here (shell, read, write, jobs,
+ * servers, memory, respond_*, custom-tool/skill factories, LLM plumbing).
+ *
+ * Permissions are checked before each tool execution. Denied operations
+ * return an error result (the agent sees it and can adjust).
  */
 
 import { spawn } from "child_process";
@@ -1607,7 +1615,7 @@ const createCustomToolSchema = Type.Object({
   name: Type.String({ pattern: "^[a-z][a-z0-9_]*$", description: "Tool name (what the agent calls). Lowercase, letters/digits/underscore, max 40 chars." }),
   display_name: Type.String({ description: "Human-readable title shown in the custom tools index." }),
   description: Type.String({ description: "What the tool does and when to use it. Shown to the agent — be concrete." }),
-  command: Type.String({ description: "Shell command. Use $param_name for placeholders — they're substituted with the agent's arguments at call time." }),
+  command: Type.String({ description: "Shell command. MUST invoke a file inside workspace/<name>/ (commands run with cwd=workspace), e.g. `bun <name>/src/cli.ts --flag $flag`. Inline scripts (python3 -c, node -e, bash -c, heredocs) are REJECTED — put the logic in workspace/<name>/. Use $param_name for placeholders — substituted with the agent's arguments at call time." }),
   install: Type.Optional(Type.String({ description: "Optional one-off install/setup command (e.g., 'brew install foo'). Runs once on first load if the dep is missing." })),
   parameters: Type.Array(customToolParamSchema, { description: "Parameters the agent must/may pass. Names must match the $name placeholders in command." }),
   overwrite: Type.Optional(Type.Boolean({ description: "Overwrite an existing user-layer tool with the same name. Default: false." })),
@@ -1666,11 +1674,33 @@ function renderCustomToolMarkdown(params: {
   return lines.join("\n");
 }
 
+// Enforce the "integration pattern": custom-tool Commands must invoke an
+// executable inside workspace/<name>/ rather than embed logic inline. This is
+// the guardrail that keeps the extension system from degenerating into a shell
+// of one-liners that bypass the project/stack defaults in integrationDefaults.
+function checkCommandShape(command: string): string | null {
+  const cmd = command.trim();
+
+  if (/\b(python3?|node|bun|deno|ruby|perl|php|bash|sh|zsh)\s+-[ce]\b/.test(cmd)) {
+    return `Invalid Command: inline interpreter flags (-e/-c) are not allowed. The tool's logic must live in workspace/<name>/ and be invoked via \`bun <name>/src/cli.ts …\` (or the equivalent for your stack). See custom-tools/_example-integration.md for the canonical shape.`;
+  }
+
+  if (/<<-?\s*['"]?[A-Za-z_][A-Za-z0-9_]*/.test(cmd)) {
+    return `Invalid Command: heredocs (<<EOF, <<'PY', …) are not allowed. Move the script into workspace/<name>/ and invoke it. See custom-tools/_example-integration.md for the pattern.`;
+  }
+
+  if (!cmd.includes("/")) {
+    return `Invalid Command: must invoke a file under workspace/<name>/ (commands run with cwd=workspace). Create a project in workspace/<name>/ with the real code and make Command reference it, e.g. \`bun <name>/src/cli.ts --flag $flag\`. See custom-tools/_example-integration.md.`;
+  }
+
+  return null;
+}
+
 function createCreateCustomToolTool(): AgentTool<typeof createCustomToolSchema> {
   return {
     name: "create_custom_tool",
     label: "Create a user custom tool",
-    description: "Create or overwrite a user-layer custom tool. The tool is stored at data/user/custom-tools/<name>.md, hot-reloaded on next request, and available to the agent immediately. NEVER edit src/tools.ts or any other core file — use this. All parameters map directly to the schema; the tool builds the markdown file for you so the loader always parses it correctly.",
+    description: "Create or overwrite a user-layer custom tool. The tool is stored at data/user/custom-tools/<name>.md, hot-reloaded on next request, and available to the agent immediately. NEVER edit src/tools.ts or any other core file — use this. Before calling: read data/user/prefs.json → integrationDefaults for the stack (language/runtime/compileToBinary); scaffold a proper project under workspace/<name>/ with the real code in that stack; then call this tool with Command invoking that project (e.g. `bun <name>/src/cli.ts …`). Inline scripts (python3 -c, node -e, heredocs) are REJECTED by this tool — the logic MUST live in workspace/<name>/. See custom-tools/_example-integration.md for the canonical shape.",
     parameters: createCustomToolSchema,
     async execute(_id, params) {
       const name = params.name;
@@ -1688,6 +1718,15 @@ function createCreateCustomToolTool(): AgentTool<typeof createCustomToolSchema> 
         return {
           content: [{ type: "text", text: `Command references unknown placeholder(s): ${missing.map((m) => "$" + m).join(", ")}. Declare them as parameters first.` }],
           details: { error: "unknown_placeholders", missing },
+        };
+      }
+
+      // Reject inline-script commands — the logic must live in workspace/<name>/.
+      const cmdViolation = checkCommandShape(params.command);
+      if (cmdViolation) {
+        return {
+          content: [{ type: "text", text: cmdViolation }],
+          details: { error: "invalid_command_shape" },
         };
       }
 

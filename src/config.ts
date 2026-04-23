@@ -18,6 +18,7 @@ export interface Config {
   llmModel: string;
   llmBaseUrl?: string;
   maxHistory: number;
+  maxRecall: number;
   sessionTtlMs: number;
   workingDir: string;
   fetchMessage: string;
@@ -669,6 +670,7 @@ export function loadConfig(): Config {
     llmModel: process.env.LLM_MODEL || "claude-sonnet-4-20250514",
     llmBaseUrl: process.env.LLM_BASE_URL,
     maxHistory: Number(process.env.MAX_HISTORY) || 50,
+    maxRecall: Number(process.env.MAX_RECALL) || 5,
     sessionTtlMs: (Number(process.env.SESSION_TTL_MINUTES) || 60) * 60 * 1000,
     workingDir: process.env.WORKING_DIR || join(PROJECT_ROOT, "workspace"),
     fetchMessage: (process.env.FETCH_MESSAGE || "fetchPendingTasks").toLowerCase(),

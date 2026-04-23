@@ -364,7 +364,7 @@ Bun.serve({
 
     try {
       // Build context: recent messages + relevant memories (FTS5 + vector if enabled)
-      const messages = await buildContext(sessionId, chatInput, config.vectorMemoryEnabled);
+      const messages = await buildContext(sessionId, chatInput, config.vectorMemoryEnabled, config.maxRecall);
       const rawResponses = await chat(config, getSystemPrompt(config.agentName, config.vectorMemoryEnabled, config.userName, config.onboardingChat), messages, tools);
 
       // Execute server-side shortcuts (macOS only) before sending to device

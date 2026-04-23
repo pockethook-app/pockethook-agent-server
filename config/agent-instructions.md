@@ -14,6 +14,30 @@ The following are the framework core. Never edit them — not with `write`, not 
 
 If you think you need to modify a framework file, you're wrong — use one of the dedicated extension tools below.
 
+## Decision rule: where does a new integration go?
+
+When the user asks you to "add a tool / integration / connector for X":
+
+| What the user asks for                                       | Where it lives                                                       | How you create it                             |
+|--------------------------------------------------------------|----------------------------------------------------------------------|-----------------------------------------------|
+| External API, CLI, or server-side script                     | `data/user/custom-tools/<x>.md` + optional `workspace/<x>/` project  | `create_custom_tool`                          |
+| iOS Shortcut or behavior rule                                | `data/user/skills/<x>.md`                                            | `create_user_skill`                           |
+| Multi-file project (service, scraper, app)                   | `workspace/<x>/` + a custom-tool that invokes it                     | `create_project` + `create_custom_tool`       |
+| Framework primitive (new LLM provider, new core mechanic)    | `src/**`                                                             | only if the user EXPLICITLY asks for framework work — never for personal integrations |
+
+Hard rule: **if the user said "tool / integration" and did NOT say "framework / core", the answer is NEVER to edit `src/**`.** A `workspace/<name>/` project plus a `data/user/custom-tools/<name>.md` that invokes it is the default pattern.
+
+**Stack defaults — read `data/user/prefs.json → integrationDefaults` before scaffolding. No exceptions.** Fields: `language`, `runtime`, `compileToBinary`, `notes` (free-form hints). If prefs say Bun + TypeScript + compile, you don't get to choose Python "because it's a small tool." The preference always wins. If the user asks to change the default ("usa Go de ahora en adelante"), update `data/user/prefs.json` and don't re-ask on future integrations. If `integrationDefaults` is entirely missing, ask once and persist.
+
+**How a custom-tool must look — non-negotiable:**
+- The `Command:` field invokes a binary or script that lives under `workspace/<name>/`. It does NOT contain heredocs (`<<EOF`, `<<'PY'`), multi-line scripts, inline `python3 -c`/`node -e`/`bash -c '…'` logic, or pipe chains that do real work. If you're writing more than a flag-passing invocation in `Command:`, stop — the logic belongs in `workspace/<name>/`.
+- The actual code (parsing, validation, API calls, business logic, whatever) lives in a proper project under `workspace/<name>/`, in the stack from `integrationDefaults`.
+- The `Install:` field (optional) installs deps once, cached. For the Bun default: `cd <name> && bun install --production`. For Go: `go build -o <name> ./cmd/<name>` (Go has no runtime lookup). For Python: `pip install -r requirements.txt`.
+- **Execution mode follows `integrationDefaults.compileToBinary`:**
+  - `false` (default) → run from source with the runtime: `Command: bun <name>/src/cli.ts --flag $flag` (or `python3 <name>/cli.py …`, `node <name>/cli.js …`, etc.). Smallest overhead, fastest iteration, no build step for trivial tools.
+  - `true` → also run `bun run build` (or equivalent) in Install and invoke the compiled artifact: `Command: ./<name>/<name> --flag $flag`. Use when the user asks for a standalone binary.
+- **Template:** `custom-tools/_example-integration.md`. Imitate this shape every time.
+
 ## How to extend the system
 
 Every user customization lives under `data/user/`. Use these dedicated tools — they build the file with the correct format so the loader always accepts it:

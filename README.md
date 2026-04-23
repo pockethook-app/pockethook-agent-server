@@ -66,6 +66,7 @@ bun run tunnel    # HTTPS tunnel in another terminal
 | `bun run switch` | Change LLM provider/model |
 | `bun run personality` | Configure agent personality and emoji usage |
 | `bun run permissions` | Configure tool permissions |
+| `bun run memory` | Configure short-term window (`MAX_HISTORY`) and semantic recall (`MAX_RECALL`) |
 | `bun run refresh` | Refresh OAuth token (Codex / Copilot) |
 | `bun run start` | Start the server |
 | `bun run dev` | Start with hot-reload |
@@ -91,6 +92,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `PORT` | `3000` | Server port |
 | `AGENT_NAME` | `PocketHook Assistant` | How the agent introduces itself |
 | `MAX_HISTORY` | `50` | Messages kept in short-term memory per session |
+| `MAX_RECALL` | `5` | Memories returned per turn by semantic recall (only when `VECTOR_MEMORY=true`) |
 | `SESSION_TTL_MINUTES` | `60` | Session expiration time |
 | `WORKING_DIR` | `workspace/` | Agent's restricted working directory |
 | `FETCH_MESSAGE` | `fetchPendingTasks` | Message that triggers job result delivery |
@@ -255,6 +257,23 @@ Example:
   "tunnel": { "domain": "my-host.ts.net" }
 }
 ```
+
+#### `integrationDefaults` — stack the agent uses when scaffolding a new integration
+
+When you ask the agent to "add a tool / integration for X", it scaffolds a project under `workspace/` and registers a custom-tool. The `integrationDefaults` block in `prefs.json` tells it *what stack to use*:
+
+```json
+{
+  "integrationDefaults": {
+    "language": "typescript",
+    "runtime": "bun",
+    "compileToBinary": false,
+    "notes": ""
+  }
+}
+```
+
+Recommended default: Bun + TypeScript + **run-from-source** (no compile step — the server already has Bun, so the smaller/faster path wins for local integrations). To change it, just ask the agent: *"de ahora en adelante usa Go para las integraciones"* or *"compila las integraciones a binario"* — it updates `prefs.json` for you. `notes` is a free-form escape hatch for hints that don't fit the other three fields (preferred CLI library, dep manager, testing framework, etc.). See `custom-tools/_example-integration.md` for the canonical shape the agent follows.
 
 ### Migrating personal content out of the base
 
@@ -458,9 +477,12 @@ The memory system has three layers, each stored in its own database:
 
 SQLite with FTS5 full-text search. All messages are stored with timestamps and session IDs. FTS5 provides keyword-based recall across sessions.
 
-- **Short-term** — Last N messages kept in memory per session
+- **Short-term** — Last `MAX_HISTORY` messages kept in memory per session
 - **Long-term** — All messages persisted in SQLite, searched via FTS5
+- **Recall per turn** — When semantic memory is on, `MAX_RECALL` controls how many relevant memories are injected into the prompt each turn
 - Sessions expire after `SESSION_TTL_MINUTES`, but long-term memory persists
+
+Tune these interactively with `bun run memory`.
 
 ### Semantic memory (`data/knowledge.db`) — optional
 

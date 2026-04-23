@@ -139,6 +139,14 @@ export function loadCustomToolDefs(): CustomToolDef[] {
         const content = readFileSync(join(dir, file), "utf-8");
         const def = parseCustomTool(content, file);
         if (def) {
+          const cmd = def.command.trim();
+          if (
+            /\b(python3?|node|bun|deno|ruby|perl|php|bash|sh|zsh)\s+-[ce]\b/.test(cmd) ||
+            /<<-?\s*['"]?[A-Za-z_][A-Za-z0-9_]*/.test(cmd) ||
+            !cmd.includes("/")
+          ) {
+            logger.warn(`Custom tool "${def.toolName}" (${file}) has an inline-script Command. Move logic to workspace/<name>/ and invoke via \`bun <name>/src/cli.ts …\`. See custom-tools/_example-integration.md.`);
+          }
           byToolName.set(def.toolName, def);
         } else {
           logger.warn(`Could not parse custom tool: ${file} (in ${dir})`);
