@@ -10,7 +10,7 @@
         "@mariozechner/pi-ai": "^0.57.1",
         "open": "^11.0.0",
         "picocolors": "^1.1.1",
-        "pockethook-sdk": "^0.1.0",
+        "pockethook-sdk": "^0.1.2",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -383,7 +383,7 @@
 
     "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
 
-    "pockethook-sdk": ["pockethook-sdk@0.1.0", "", {}, "sha512-60F5HmT70DFhxy89YO1lFLg7iYkQ5zIbe4qGDrLK4zj9YUHsC36wlWLKINp3AfUbXn9WWPYce6XmhW6PS+Kksw=="],
+    "pockethook-sdk": ["pockethook-sdk@0.1.2", "", {}, "sha512-peG7mglN4ZZelH5Kd5MqtagEdKEKBDl5XgdEfDTKg+XvXEUEVMORadRwWvzH3koeFFqL1spfrE+55Kw39uLi9A=="],
 
     "powershell-utils": ["powershell-utils@0.1.0", "", {}, "sha512-dM0jVuXJPsDN6DvRpea484tCUaMiXWjuCn++HGTqUWzGDjv5tZkEZldAJ/UMlqRYGFrD/etByo4/xOuC/snX2A=="],
 
