@@ -1,11 +1,21 @@
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
-import type { Provider } from "@mariozechner/pi-ai";
+import type { Provider, ThinkingLevel } from "@mariozechner/pi-ai";
 import { logger } from "./logger.js";
 import { getCustomToolsPrompt, CUSTOM_TOOLS_DIR } from "./custom-tools.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
+export type ReasoningSetting = "off" | ThinkingLevel;
+
+const REASONING_VALUES: ReasoningSetting[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+export function parseReasoning(raw: string | undefined): ReasoningSetting {
+  if (!raw) return "off";
+  const normalized = raw.trim().toLowerCase();
+  return (REASONING_VALUES as string[]).includes(normalized) ? (normalized as ReasoningSetting) : "off";
+}
 
 export interface Config {
   port: number;
@@ -17,6 +27,7 @@ export interface Config {
   llmProvider: Provider;
   llmModel: string;
   llmBaseUrl?: string;
+  llmReasoning: ReasoningSetting;
   maxHistory: number;
   maxRecall: number;
   sessionTtlMs: number;
@@ -669,6 +680,7 @@ export function loadConfig(): Config {
     llmProvider: (process.env.LLM_PROVIDER || "anthropic") as Provider,
     llmModel: process.env.LLM_MODEL || "claude-sonnet-4-20250514",
     llmBaseUrl: process.env.LLM_BASE_URL,
+    llmReasoning: parseReasoning(process.env.LLM_REASONING),
     maxHistory: Number(process.env.MAX_HISTORY) || 50,
     maxRecall: Number(process.env.MAX_RECALL) || 5,
     sessionTtlMs: (Number(process.env.SESSION_TTL_MINUTES) || 60) * 60 * 1000,

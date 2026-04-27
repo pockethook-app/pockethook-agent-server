@@ -124,6 +124,7 @@ export async function quickPrompt(config: Config, prompt: string, maxTokens: num
     },
     getApiKey: async () => apiKey,
   });
+  if (config.llmReasoning !== "off") agent.setThinkingLevel(config.llmReasoning);
 
   const result = await agent.prompt(prompt);
 
@@ -153,7 +154,7 @@ export async function chat(
 ): Promise<PocketHookResponse[]> {
   if (!cachedModel) {
     cachedModel = resolveModel(config);
-    logger.info(`LLM resolved: ${cachedModel.provider}/${cachedModel.id} (api: ${cachedModel.api})`);
+    logger.info(`LLM resolved: ${cachedModel.provider}/${cachedModel.id} (api: ${cachedModel.api}, reasoning: ${config.llmReasoning})`);
   }
 
   const apiKey = await ensureFreshApiKey(config);
@@ -179,6 +180,7 @@ export async function chat(
     },
     getApiKey: async () => apiKey,
   });
+  if (config.llmReasoning !== "off") agent.setThinkingLevel(config.llmReasoning);
 
   // Get last user message text
   const lastMessage = messages[messages.length - 1];

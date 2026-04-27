@@ -411,7 +411,7 @@ logger.info(`  GET  ${base}/jobs       → Jobs polling`);
 if (config.dashboardEnabled) {
   logger.info(`  GET  ${base}/dashboard  → Dashboard`);
 }
-logger.info(`LLM: ${config.llmProvider}/${config.llmModel}`);
+logger.info(`LLM: ${config.llmProvider}/${config.llmModel} (reasoning: ${config.llmReasoning})`);
 
 // Cleanup dev servers on shutdown
 process.on("SIGINT", () => { cleanupServers(); process.exit(0); });

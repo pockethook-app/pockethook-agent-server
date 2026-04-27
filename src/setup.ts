@@ -164,6 +164,27 @@ async function runCopilotOAuth(): Promise<{ access: string; refresh: string; exp
 
 // ── Shared: select provider + auth ───────────────────────────────────────
 
+async function selectReasoning(env: Record<string, string>): Promise<void> {
+  const level = await p.select({
+    message: "Reasoning effort",
+    options: [
+      { value: "off", label: "off", hint: "no reasoning tokens — cheapest, fastest" },
+      { value: "minimal", label: "minimal", hint: "tiny budget, slight extra cost" },
+      { value: "low", label: "low", hint: "small budget" },
+      { value: "medium", label: "medium", hint: "balanced (Anthropic / OpenAI default-ish)" },
+      { value: "high", label: "high", hint: "deeper thinking, ~3-5× output cost" },
+      { value: "xhigh", label: "xhigh", hint: "highest budget where supported" },
+    ],
+    initialValue: env.LLM_REASONING || "off",
+  });
+  if (p.isCancel(level)) cancelled();
+  if (level === "off") {
+    delete env.LLM_REASONING;
+  } else {
+    env.LLM_REASONING = level as string;
+  }
+}
+
 async function selectProvider(env: Record<string, string>): Promise<ProviderEntry> {
   const providerKey = await p.select({
     message: "LLM provider",
@@ -298,6 +319,8 @@ async function setup() {
   });
   if (p.isCancel(model)) cancelled();
   env.LLM_MODEL = model;
+
+  await selectReasoning(env);
 
   const port = await p.text({
     message: "Server port",
@@ -542,6 +565,8 @@ async function switchProvider() {
   });
   if (p.isCancel(model)) cancelled();
   env.LLM_MODEL = model;
+
+  await selectReasoning(env);
 
   await configureAuth(provider, env);
 
