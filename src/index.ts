@@ -15,7 +15,7 @@ import { checkEmbeddingAvailable, configure as configureEmbeddings } from "./emb
 import { migrateEmbeddings, configureClassifier } from "./vector-memory.js";
 import { loadPermissions } from "./permissions.js";
 import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
-import { getDashboardHtml, getJobsJson, hasDistDashboard, serveDashboardAsset, getDashboardToken } from "./dashboard.js";
+import { getDashboardHtml, getJobsJson, hasDistDashboard, serveDashboardAsset } from "./dashboard.js";
 import { initWorkspaceGit } from "./versioning.js";
 import { cleanupServers } from "./servers.js";
 import { checkRateLimit, configureRateLimit } from "./rate-limit.js";
@@ -226,10 +226,6 @@ Bun.serve({
     if (req.method === "GET" && url.pathname === "/api/jobs") {
       if (!config.dashboardEnabled) {
         return new Response("Not Found", { status: 404 });
-      }
-      const dtk = req.headers.get("X-Dashboard-Token");
-      if (dtk !== getDashboardToken()) {
-        return new Response("Forbidden", { status: 403 });
       }
       return new Response(JSON.stringify(getJobsJson()), {
         status: 200,

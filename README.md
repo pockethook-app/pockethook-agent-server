@@ -151,6 +151,8 @@ Response:
 
 Shows a live overview of background jobs with status, schedule, and output. Auto-refreshes every 30 seconds. Disabled when `DASHBOARD=false`.
 
+> **Unauthenticated by design.** Both `/dashboard` and `/api/jobs` are open `GET` endpoints — anyone who can reach the host can list jobs. Restrict access at the network layer (Tailscale ACL, firewall, reverse proxy with basic auth) or set `DASHBOARD=false` if you don't need it. The PocketHook iOS app does not use these endpoints.
+
 Fully customizable with two approaches:
 
 - **Single HTML file** — Place a `dashboard.html` in `workspace/dashboard/` for quick customizations. Hot-reloaded on change.

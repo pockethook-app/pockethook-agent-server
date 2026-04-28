@@ -13,24 +13,10 @@
  */
 
 import { existsSync, readFileSync, statSync } from "fs";
-import { randomBytes } from "crypto";
 import { dirname, join, extname } from "path";
 import { fileURLToPath } from "url";
 import { listJobs } from "./jobs.js";
 import { logger } from "./logger.js";
-
-const dashboardToken = randomBytes(32).toString("hex");
-
-export function getDashboardToken(): string {
-  return dashboardToken;
-}
-
-function injectToken(html: string): string {
-  const script = `<script>window.__DASHBOARD_TOKEN__="${dashboardToken}";</script>`;
-  if (html.includes("</head>")) return html.replace("</head>", `${script}\n</head>`);
-  if (html.includes("<body")) return html.replace("<body", `${script}\n<body`);
-  return script + html;
-}
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DASHBOARD_DIR = join(PROJECT_ROOT, "workspace", "dashboard");
@@ -132,7 +118,7 @@ export function getDashboardHtml(): string {
         cachedCustomMtime = mtime;
         logger.info("Dashboard dist/index.html reloaded");
       }
-      return injectToken(cachedCustomHtml);
+      return cachedCustomHtml;
     }
   } catch {}
 
@@ -145,7 +131,7 @@ export function getDashboardHtml(): string {
         cachedCustomMtime = mtime;
         logger.info("Custom dashboard.html reloaded");
       }
-      return injectToken(cachedCustomHtml);
+      return cachedCustomHtml;
     }
   } catch {}
 
@@ -156,7 +142,7 @@ export function getDashboardHtml(): string {
     logger.info("Custom dashboard removed, using default");
   }
 
-  return DEFAULT_DASHBOARD_HTML.replace("__DASHBOARD_TOKEN__", dashboardToken);
+  return DEFAULT_DASHBOARD_HTML;
 }
 
 const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
@@ -416,7 +402,7 @@ const DEFAULT_DASHBOARD_HTML = `<!DOCTYPE html>
 <script>
   async function load() {
     try {
-      const res = await fetch("/api/jobs", { headers: { "X-Dashboard-Token": "__DASHBOARD_TOKEN__" } });
+      const res = await fetch("/api/jobs");
       const jobs = await res.json();
       render(jobs);
       document.getElementById("last-update").textContent = "Updated " + new Date().toLocaleTimeString();
