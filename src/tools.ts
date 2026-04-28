@@ -295,6 +295,12 @@ export interface PocketHookResponse {
   run_on?: "server" | "device";
 }
 
+// Shared: optional URL attached to a response. Rendered by the iOS app as a
+// link / preview alongside the message. Sanitized for localhost rewrites.
+const urlSchema = Type.Optional(Type.String({
+  description: "Optional HTTPS URL attached to the response. Use this when the message references something the user should be able to tap (web page, image, document). Distinct from msg — the URL is rendered as a separate link, not embedded in the text.",
+}));
+
 // Shared: button spec used by respond_buttons and sequence steps.
 const buttonSchema = Type.Object({
   label: Type.String({ description: "Button label shown to the user.", maxLength: 40 }),
@@ -421,6 +427,7 @@ function emit(
 
 const respondTextSchema = Type.Object({
   text: Type.String({ description: "Message text. Markdown is supported (bold, italic, code, links, lists)." }),
+  url: urlSchema,
 });
 
 function createRespondTextTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondTextSchema> {
@@ -430,7 +437,7 @@ function createRespondTextTool(onRespond: (responses: PocketHookResponse[]) => v
     description: "Send a plain text (or Markdown) message to the user. This is the default way to reply when you just need to say something. For images use respond_image, for buttons respond_buttons, for HTML respond_html, for shortcuts respond_shortcut. NEVER embed image URLs or Button: lines in the text here — those require their dedicated tools.",
     parameters: respondTextSchema,
     async execute(_id, params) {
-      emit(onRespond, { msg: params.text });
+      emit(onRespond, { msg: params.text, url: params.url });
       return { content: [{ type: "text", text: "Text response sent." }], details: { kind: "text" } };
     },
   };
@@ -467,6 +474,7 @@ const respondButtonsSchema = Type.Object({
     maxItems: 5,
     description: "1 to 5 interactive buttons rendered below the msg.",
   }),
+  url: urlSchema,
 });
 
 function createRespondButtonsTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondButtonsSchema> {
@@ -477,7 +485,7 @@ function createRespondButtonsTool(onRespond: (responses: PocketHookResponse[]) =
     parameters: respondButtonsSchema,
     async execute(_id, params) {
       const combined = buildButtonsMsg(params.msg, params.buttons);
-      emit(onRespond, { msg: combined });
+      emit(onRespond, { msg: combined, url: params.url });
       return { content: [{ type: "text", text: `Sent message with ${params.buttons.length} button(s).` }], details: { kind: "buttons", count: params.buttons.length } };
     },
   };
@@ -495,6 +503,7 @@ const respondShortcutSchema = Type.Object({
   run_on: Type.Optional(Type.Union([Type.Literal("device"), Type.Literal("server")], {
     description: "device (default): run on the iOS device. server: run on the Mac server (only for skills with target: mac).",
   })),
+  url: urlSchema,
 });
 
 function createRespondShortcutTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondShortcutSchema> {
@@ -509,6 +518,7 @@ function createRespondShortcutTool(onRespond: (responses: PocketHookResponse[]) 
         shortcut: params.shortcut_name,
         data: params.data as Record<string, unknown> | Record<string, unknown>[] | undefined,
         run_on: params.run_on,
+        url: params.url,
       });
       return { content: [{ type: "text", text: `Shortcut response sent (${params.shortcut_name}).` }], details: { kind: "shortcut", shortcut: params.shortcut_name } };
     },
@@ -519,6 +529,7 @@ function createRespondShortcutTool(onRespond: (responses: PocketHookResponse[]) 
 
 const respondHtmlSchema = Type.Object({
   html: Type.String({ description: "HTML content. Will be auto-wrapped in <div>…</div> if it doesn't already start with <div, <html or <!DOCTYPE — iOS requires one of those prefixes to detect HTML mode." }),
+  url: urlSchema,
 });
 
 function createRespondHtmlTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondHtmlSchema> {
@@ -528,7 +539,7 @@ function createRespondHtmlTool(onRespond: (responses: PocketHookResponse[]) => v
     description: "Send rich HTML content. Use when Markdown isn't enough (tables, complex layouts, inline images via <img>). The tool auto-wraps in <div> if the prefix is missing.",
     parameters: respondHtmlSchema,
     async execute(_id, params) {
-      emit(onRespond, { msg: wrapHtml(params.html) });
+      emit(onRespond, { msg: wrapHtml(params.html), url: params.url });
       return { content: [{ type: "text", text: "HTML response sent." }], details: { kind: "html" } };
     },
   };
@@ -539,6 +550,7 @@ function createRespondHtmlTool(onRespond: (responses: PocketHookResponse[]) => v
 const seqTextStepSchema = Type.Object({
   kind: Type.Literal("text"),
   text: Type.String({ description: "Message text for this step." }),
+  url: urlSchema,
 });
 
 const seqShortcutStepSchema = Type.Object({
@@ -550,12 +562,14 @@ const seqShortcutStepSchema = Type.Object({
     Type.Array(Type.Record(Type.String(), Type.Unknown())),
   ])),
   run_on: Type.Optional(Type.Union([Type.Literal("device"), Type.Literal("server")])),
+  url: urlSchema,
 });
 
 const seqButtonsStepSchema = Type.Object({
   kind: Type.Literal("buttons"),
   msg: Type.String(),
   buttons: Type.Array(buttonSchema, { minItems: 1, maxItems: 5 }),
+  url: urlSchema,
 });
 
 const respondSequenceSchema = Type.Object({
@@ -570,9 +584,9 @@ const respondSequenceSchema = Type.Object({
 });
 
 type SeqStep =
-  | { kind: "text"; text: string }
-  | { kind: "shortcut"; msg: string; shortcut_name: string; data?: Record<string, unknown> | Record<string, unknown>[]; run_on?: "device" | "server" }
-  | { kind: "buttons"; msg: string; buttons: Array<{ label: string; action: "sendMessage" | "openURL" | "triggerShortcut"; value: string }> };
+  | { kind: "text"; text: string; url?: string }
+  | { kind: "shortcut"; msg: string; shortcut_name: string; data?: Record<string, unknown> | Record<string, unknown>[]; run_on?: "device" | "server"; url?: string }
+  | { kind: "buttons"; msg: string; buttons: Array<{ label: string; action: "sendMessage" | "openURL" | "triggerShortcut"; value: string }>; url?: string };
 
 function createRespondSequenceTool(onRespond: (responses: PocketHookResponse[]) => void): AgentTool<typeof respondSequenceSchema> {
   return {
@@ -583,7 +597,7 @@ function createRespondSequenceTool(onRespond: (responses: PocketHookResponse[]) 
     async execute(_id, params) {
       const responses: PocketHookResponse[] = (params.steps as SeqStep[]).map((step) => {
         if (step.kind === "text") {
-          return { msg: step.text };
+          return { msg: step.text, url: step.url };
         }
         if (step.kind === "shortcut") {
           return {
@@ -591,9 +605,10 @@ function createRespondSequenceTool(onRespond: (responses: PocketHookResponse[]) 
             shortcut: step.shortcut_name,
             data: step.data,
             run_on: step.run_on,
+            url: step.url,
           };
         }
-        return { msg: buildButtonsMsg(step.msg, step.buttons) };
+        return { msg: buildButtonsMsg(step.msg, step.buttons), url: step.url };
       });
       const count = emit(onRespond, responses);
       return { content: [{ type: "text", text: `Sequence sent (${count} step${count > 1 ? "s" : ""}).` }], details: { kind: "sequence", count } };

@@ -86,12 +86,12 @@ IMPORTANT: you MUST deliver your reply by calling exactly ONE of the respond_* t
 
 ## Respond tools (pick the right one)
 
-- \`respond_text({ text })\` — plain text or Markdown. Default choice for a regular reply.
+- \`respond_text({ text, url? })\` — plain text or Markdown. Default choice for a regular reply. Optional \`url\` attaches a tappable link (rendered separately, not embedded in the text).
 - \`respond_image({ url })\` — send an image. The URL IS the entire message; it must start with \`https\` and end in \`.png/.jpg/.jpeg/.gif/.webp\` (querystrings allowed). Do NOT include a caption — iOS only renders the image when the msg is the bare URL.
-- \`respond_buttons({ msg, buttons })\` — message with 1–5 interactive buttons. Each button has label + action (\`sendMessage\` | \`openURL\` | \`triggerShortcut\`) + value. The tool formats the \`Button:\` syntax; you never write it by hand.
-- \`respond_shortcut({ msg, shortcut_name, data?, run_on? })\` — trigger an iOS Shortcut. \`shortcut_name\` must match EXACTLY. Put the payload in \`data\`, not \`msg\`. Use \`run_on: "server"\` only for skills with \`target: mac\`.
-- \`respond_html({ html })\` — rich HTML content. Auto-wraps in \`<div>\` if you forget the prefix.
-- \`respond_sequence({ steps })\` — chain multiple text/buttons/shortcut steps. iOS **concatenates** all messages into ONE bubble with bullets and runs shortcuts in order. Use only when you genuinely need chained shortcuts; otherwise prefer a single respond_text. Image and HTML steps are not allowed in sequences (iOS can't render them when concatenated).
+- \`respond_buttons({ msg, buttons, url? })\` — message with 1–5 interactive buttons. Each button has label + action (\`sendMessage\` | \`openURL\` | \`triggerShortcut\`) + value. The tool formats the \`Button:\` syntax; you never write it by hand. Optional \`url\` attaches a link.
+- \`respond_shortcut({ msg, shortcut_name, data?, run_on?, url? })\` — trigger an iOS Shortcut. \`shortcut_name\` must match EXACTLY. Put the payload in \`data\`, not \`msg\`. Use \`run_on: "server"\` only for skills with \`target: mac\`.
+- \`respond_html({ html, url? })\` — rich HTML content. Auto-wraps in \`<div>\` if you forget the prefix.
+- \`respond_sequence({ steps })\` — chain multiple text/buttons/shortcut steps. iOS **concatenates** all messages into ONE bubble with bullets and runs shortcuts in order. Use only when you genuinely need chained shortcuts; otherwise prefer a single respond_text. Each step accepts an optional \`url\`. Image and HTML steps are not allowed in sequences (iOS can't render them when concatenated).
 
 ### Key constraints (enforced by schemas)
 
