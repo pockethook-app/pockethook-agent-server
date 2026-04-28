@@ -89,6 +89,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `LLM_API_KEY` | (required) | LLM provider API key or OAuth token |
 | `LLM_PROVIDER` | `anthropic` | LLM provider name |
 | `LLM_MODEL` | `claude-sonnet-4-20250514` | Model ID |
+| `LLM_REASONING` | `off` | Reasoning effort: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Higher levels add hidden thinking tokens (slower + more expensive). Ignored or rejected by models that don't support it. |
 | `PORT` | `3000` | Server port |
 | `AGENT_NAME` | `PocketHook Assistant` | How the agent introduces itself |
 | `MAX_HISTORY` | `50` | Messages kept in short-term memory per session |
@@ -113,6 +114,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `EMBEDDING_URL` | (auto) | Embedding API URL. Defaults: Ollama `http://localhost:11434`, LM Studio `http://localhost:1234`, OpenAI `https://api.openai.com` |
 | `EMBEDDING_API_KEY` | — | API key for OpenAI embeddings (not needed for Ollama/LM Studio) |
 | `TOOLS` | `all` | Enabled tools (see Permissions) |
+| `INSTANCE_NAME` | (project dir basename, with `pockethook-` prefix stripped) | Suffix used for the system service label, log directory, and process matching. Set explicitly when running multiple checkouts on the same machine. |
 
 ### Supported providers
 
@@ -209,11 +211,13 @@ During install, you can optionally configure the HTTPS tunnel (Tailscale recomme
 
 | Platform | Backend | Service location |
 |----------|---------|-----------------|
-| macOS | launchd | `~/Library/LaunchAgents/com.pockethook.agent-server.plist` |
-| Linux | systemd (user) | `~/.config/systemd/user/pockethook-agent-server.service` |
-| Windows | NSSM | Windows Service Manager |
+| macOS | launchd | `~/Library/LaunchAgents/com.pockethook.${INSTANCE_NAME}.plist` |
+| Linux | systemd (user) | `~/.config/systemd/user/pockethook-${INSTANCE_NAME}.service` |
+| Windows | NSSM | Windows Service Manager (`PocketHook-${PascalCase(INSTANCE_NAME)}`) |
 
-The service auto-restarts on failure. Logs on macOS go to `~/Library/Logs/pockethook-agent-server/`.
+The service auto-restarts on failure. Logs on macOS go to `~/Library/Logs/pockethook-${INSTANCE_NAME}/`.
+
+`INSTANCE_NAME` defaults to the project directory basename (with the `pockethook-` prefix stripped) — e.g., a checkout in `pockethook-agent-server/` becomes `agent-server`. Set it explicitly to run several checkouts on the same machine without collisions (e.g., a personal install plus a demo install). Each instance keeps its own `data/` and logs.
 
 Manage the service:
 ```bash
