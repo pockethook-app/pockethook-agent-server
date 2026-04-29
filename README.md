@@ -221,6 +221,8 @@ The service auto-restarts on failure. Logs on macOS go to `~/Library/Logs/pocket
 
 `INSTANCE_NAME` defaults to the project directory basename (with the `pockethook-` prefix stripped) — e.g., a checkout in `pockethook-agent-server/` becomes `agent-server`. Set it explicitly to run several checkouts on the same machine without collisions (e.g., a personal install plus a demo install). Each instance keeps its own `data/` and logs.
 
+> If two checkouts share the same `INSTANCE_NAME` (the default when both folders have the same basename), `bun run service install` will refuse to overwrite the existing service and ask you to set a unique `INSTANCE_NAME` in `.env`. Always set `INSTANCE_NAME` explicitly when adding a second checkout.
+
 Manage the service:
 ```bash
 bun run service status     # Check if running

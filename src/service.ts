@@ -427,6 +427,36 @@ function cleanupTunnel(meta: ServiceMeta): void {
   }
 }
 
+// Returns the WorkingDirectory of an already-installed service that shares this
+// instance's service label/name, or null if no such service is installed.
+// Used to detect cross-checkout label collisions before overwriting.
+function getInstalledWorkingDir(): string | null {
+  if (PLATFORM === "darwin") {
+    if (!existsSync(LAUNCHD_PLIST)) return null;
+    const content = readFileSync(LAUNCHD_PLIST, "utf-8");
+    const match = content.match(/<key>WorkingDirectory<\/key>\s*<string>([^<]*)<\/string>/);
+    return match?.[1] ?? null;
+  }
+  if (PLATFORM === "linux") {
+    if (!existsSync(SYSTEMD_UNIT)) return null;
+    const content = readFileSync(SYSTEMD_UNIT, "utf-8");
+    const match = content.match(/^WorkingDirectory=(.*)$/m);
+    return match?.[1] ?? null;
+  }
+  if (PLATFORM === "win32") {
+    try {
+      const out = execSync(`nssm get ${NSSM_NAME} AppDirectory`, {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      return out || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 // ── Commands ─────────────────────────────────────────────────────────────
 
 async function install() {
@@ -441,6 +471,23 @@ async function install() {
     if (p.isCancel(overwrite) || !overwrite) cancelled();
     // Uninstall first
     doUninstall(existing, true);
+  }
+
+  // Refuse to overwrite a service installed by a different checkout that
+  // happens to share our label (e.g. two checkouts both named
+  // pockethook-agent-server with no INSTANCE_NAME override). Without this
+  // guard, install silently clobbers the other checkout's plist/unit.
+  const installedDir = getInstalledWorkingDir();
+  if (installedDir && resolve(installedDir) !== resolve(PROJECT_ROOT)) {
+    const labelName =
+      PLATFORM === "darwin" ? LAUNCHD_LABEL : PLATFORM === "linux" ? SYSTEMD_NAME : NSSM_NAME;
+    p.log.error(
+      `Service ${pc.cyan(labelName)} is already installed by another checkout:\n` +
+        `  ${pc.dim(installedDir)}\n\n` +
+        `Installing here would overwrite that service. Set ${pc.cyan("INSTANCE_NAME")} ` +
+        `in this checkout's .env to a unique value (e.g. ${pc.cyan("INSTANCE_NAME=maria")}) and retry.`,
+    );
+    process.exit(1);
   }
 
   const port = readEnvPort();
