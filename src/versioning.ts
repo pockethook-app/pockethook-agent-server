@@ -9,7 +9,7 @@
  * Config backups always work (plain file copies with timestamps).
  */
 
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, copyFileSync } from "fs";
 import { dirname, join, basename, relative } from "path";
 import { fileURLToPath } from "url";
@@ -19,6 +19,64 @@ const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const WORKSPACE_DIR = join(PROJECT_ROOT, "workspace");
 const BACKUPS_DIR = join(PROJECT_ROOT, "data", "backups");
 const MAX_BACKUPS_PER_FILE = 20;
+
+// Default .gitignore written into the workspace repo so auto-commits never
+// stage dependencies or build output (which would make `git add -A` huge and
+// — combined with synchronous git — freeze the event loop).
+const DEFAULT_WORKSPACE_GITIGNORE = `# OS noise
+.DS_Store
+
+# Dependencies — never version these (huge, reinstallable)
+node_modules/
+.pnp
+.pnp.js
+.venv/
+venv/
+__pycache__/
+.bun/
+
+# Build / generated output
+dist/
+build/
+out/
+.next/
+.nuxt/
+.svelte-kit/
+.cache/
+.parcel-cache/
+.turbo/
+coverage/
+
+# Logs & temp
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+*.pid
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+
+# Editor
+.vscode/
+.idea/
+`;
+
+/**
+ * Write a default .gitignore into the workspace repo if one is missing.
+ * Idempotent — never overwrites an existing file.
+ */
+function ensureWorkspaceGitignore(): void {
+  const path = join(WORKSPACE_DIR, ".gitignore");
+  if (existsSync(path)) return;
+  try {
+    writeFileSync(path, DEFAULT_WORKSPACE_GITIGNORE);
+    logger.info("Workspace .gitignore created");
+  } catch {/* best-effort */}
+}
 
 // ── Git availability ──────────────────────────────────────────────────
 
@@ -55,6 +113,9 @@ export function initWorkspaceGit(): boolean {
       mkdirSync(WORKSPACE_DIR, { recursive: true });
     }
 
+    // Ensure dependencies/build output are never staged by auto-commits.
+    ensureWorkspaceGitignore();
+
     const gitDir = join(WORKSPACE_DIR, ".git");
     if (!existsSync(gitDir)) {
       execSync("git init", { cwd: WORKSPACE_DIR, stdio: "ignore" });
@@ -75,27 +136,54 @@ export function initWorkspaceGit(): boolean {
   }
 }
 
+// Git author/committer identity for all auto-commits.
+const GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "PocketHook",
+  GIT_AUTHOR_EMAIL: "agent@pockethook",
+  GIT_COMMITTER_NAME: "PocketHook",
+  GIT_COMMITTER_EMAIL: "agent@pockethook",
+};
+
+/**
+ * Run a git command asynchronously without blocking the event loop.
+ * Resolves with the exit code and captured stdout (never rejects).
+ */
+function runGit(gitArgs: string[]): Promise<{ code: number; stdout: string }> {
+  return new Promise((resolve) => {
+    let stdout = "";
+    const child = spawn("git", gitArgs, { cwd: WORKSPACE_DIR, stdio: ["ignore", "pipe", "ignore"], env: GIT_ENV });
+    child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+    child.on("close", (code) => resolve({ code: code ?? 0, stdout }));
+    child.on("error", () => resolve({ code: -1, stdout }));
+  });
+}
+
+// Serialize commits so overlapping fire-and-forget calls don't race on
+// .git/index.lock. Each call chains onto the previous one.
+let commitQueue: Promise<void> = Promise.resolve();
+
 /**
  * Auto-commit all changes in workspace/ with a descriptive message.
+ *
+ * Fire-and-forget and fully asynchronous: git runs in a child process so it
+ * never blocks the Bun event loop (which would freeze HTTP/chat handling while
+ * a background job churns the workspace). Commits are queued and run serially.
  */
-export function commitWorkspace(message: string): boolean {
-  if (!workspaceGitInitialized || !hasGit()) return false;
+export function commitWorkspace(message: string): void {
+  if (!workspaceGitInitialized || !hasGit()) return;
 
-  try {
-    // Check if there are changes to commit
-    const status = execSync("git status --porcelain", { cwd: WORKSPACE_DIR, encoding: "utf-8" }).trim();
-    if (!status) return false; // Nothing to commit
+  commitQueue = commitQueue
+    .then(async () => {
+      // Nothing to commit? skip.
+      const status = await runGit(["status", "--porcelain"]);
+      if (!status.stdout.trim()) return;
 
-    execSync("git add -A", { cwd: WORKSPACE_DIR, stdio: "ignore" });
-    execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, {
-      cwd: WORKSPACE_DIR,
-      stdio: "ignore",
-      env: { ...process.env, GIT_AUTHOR_NAME: "PocketHook", GIT_AUTHOR_EMAIL: "agent@pockethook", GIT_COMMITTER_NAME: "PocketHook", GIT_COMMITTER_EMAIL: "agent@pockethook" },
-    });
-    return true;
-  } catch {
-    return false;
-  }
+      await runGit(["add", "-A"]);
+      // Pass the message as an argv element — no shell escaping needed.
+      await runGit(["commit", "-m", message]);
+    })
+    .catch(() => {/* best-effort versioning; never throw */});
 }
 
 /**

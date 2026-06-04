@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 — 2026-06-04
+
+### Fixes
+
+- **Background jobs no longer block the HTTP server** — `commitWorkspace` (the auto-versioning run after every `write` / `shell` tool call) executed git synchronously via `execSync`, freezing the Bun event loop for the full duration of each commit. While a `prompt` job churned the workspace, `/health`, `/jobs`, and chat requests all stalled — the iOS app appeared unable to connect until the job finished. Git now runs in a child process (`spawn`) with commits queued serially, so the event loop stays free. The commit message is passed as an argv element (no shell escaping).
+- **Workspace `.gitignore`** — `initWorkspaceGit` now writes a default `.gitignore` into the workspace repo when missing, so `node_modules/`, build output (`dist/`, `build/`, `.next/`, …), virtualenvs, logs and local env files are never versioned. Keeps auto-commits tiny and fast instead of staging thousands of dependency files on every change.
+
 ## 0.4.0 — 2026-04-15
 
 ### Breaking / behavior changes
