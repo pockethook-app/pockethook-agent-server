@@ -26,7 +26,8 @@ import type { Job } from "./jobs.js";
 import { startServer, stopServer, listServers, getAvailableTunnels } from "./servers.js";
 import { getCustomTools } from "./custom-tools.js";
 import { commitWorkspace, backupConfigFile, backupSkills, configPaths } from "./versioning.js";
-import type { Config } from "./config.js";
+import type { Config, ReasoningSetting } from "./config.js";
+import { REASONING_VALUES, updateEnvFile } from "./config.js";
 import { logger } from "./logger.js";
 
 import { VALID_ROOMS, VALID_HALLS, VALID_STATUSES } from "./vector-memory.js";
@@ -1883,9 +1884,38 @@ function createLoadSkillTool(): AgentTool<typeof loadSkillSchema> {
   };
 }
 
+// ── Reasoning level ─────────────────────────────────────────────────────
+
+const setReasoningSchema = Type.Object({
+  level: stringEnum(
+    REASONING_VALUES,
+    "Reasoning level: off, minimal, low, medium, high or xhigh",
+  ),
+});
+
+function createSetReasoningTool(config: Config): AgentTool<typeof setReasoningSchema> {
+  return {
+    name: "set_reasoning",
+    label: "Set LLM reasoning level",
+    description: "Change the model's reasoning (thinking) level at runtime. Use when the user asks for deeper thinking on hard problems (high/xhigh) or faster, cheaper replies (off/low). Takes effect from the NEXT message onward and persists across restarts. Only has an effect on models that support reasoning; on other models the level is ignored.",
+    parameters: setReasoningSchema,
+    async execute(_id, params) {
+      const previous = config.llmReasoning;
+      const level = params.level as ReasoningSetting;
+      config.llmReasoning = level;
+      updateEnvFile({ LLM_REASONING: level });
+      logger.info(`Reasoning level changed via set_reasoning: ${previous} → ${level}`);
+      return {
+        content: [{ type: "text", text: `Reasoning level set to "${level}" (was "${previous}"). It applies from the next message onward.` }],
+        details: { previous, level },
+      };
+    },
+  };
+}
+
 // ── Tool factory ────────────────────────────────────────────────────────
 
-type ToolName = "shell" | "read" | "write" | "ls" | "create_project" | "list_projects" | "delete_project" | "create_once_job" | "create_cron_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory" | "remember_fact" | "query_facts" | "load_skill" | "update_memory_status" | "complete_project" | "create_custom_tool" | "create_user_skill";
+type ToolName = "shell" | "read" | "write" | "ls" | "create_project" | "list_projects" | "delete_project" | "create_once_job" | "create_cron_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory" | "remember_fact" | "query_facts" | "load_skill" | "update_memory_status" | "complete_project" | "create_custom_tool" | "create_user_skill" | "set_reasoning";
 
 // Tool names that are added separately (respond sub-tools, run_code_job,
 // custom tools). Permissions may reference them; this set prevents false warnings.
@@ -1926,6 +1956,7 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     complete_project: () => createCompleteProjectTool(),
     create_custom_tool: () => createCreateCustomToolTool(),
     create_user_skill: () => createCreateUserSkillTool(),
+    set_reasoning: () => createSetReasoningTool(config!),
   };
 
   const tools: AgentTool<any>[] = [];

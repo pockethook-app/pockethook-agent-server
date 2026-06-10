@@ -23,7 +23,8 @@
     "update_memory_status",
     "complete_project",
     "create_custom_tool",
-    "create_user_skill"
+    "create_user_skill",
+    "set_reasoning"
   ],
   "shell": {
     "blockedCommands": ["shutdown", "reboot", "halt", "mkfs", "dd", "passwd", "chown", "chmod"],

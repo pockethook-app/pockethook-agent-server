@@ -9,7 +9,7 @@ const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 export type ReasoningSetting = "off" | ThinkingLevel;
 
-const REASONING_VALUES: ReasoningSetting[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+export const REASONING_VALUES: ReasoningSetting[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
 export function parseReasoning(raw: string | undefined): ReasoningSetting {
   if (!raw) return "off";
