@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 — 2026-06-10
+
+### Features
+
+- **`set_reasoning` tool — change the reasoning level from chat** — The agent can switch the model's reasoning (thinking) level at runtime when asked in natural language ("think harder about this", "back to fast mode"). Updates `config.llmReasoning` live — each turn builds its Agent from live config, so the change applies from the next message onward — and persists the choice to `.env`. Levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Registered in `permissions.json` and documented in the agent instructions; has no effect on models without reasoning support.
+
 ## 0.4.1 — 2026-06-04
 
 ### Fixes

@@ -89,7 +89,7 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `LLM_API_KEY` | (required) | LLM provider API key or OAuth token |
 | `LLM_PROVIDER` | `anthropic` | LLM provider name |
 | `LLM_MODEL` | `claude-sonnet-4-20250514` | Model ID |
-| `LLM_REASONING` | `off` | Reasoning effort: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Higher levels add hidden thinking tokens (slower + more expensive). Ignored or rejected by models that don't support it. |
+| `LLM_REASONING` | `off` | Reasoning effort: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Higher levels add hidden thinking tokens (slower + more expensive). Ignored or rejected by models that don't support it. Can also be changed from chat at runtime via the `set_reasoning` tool ("think harder about this") — the change applies from the next message and is persisted back to `.env`. |
 | `PORT` | `3000` | Server port |
 | `AGENT_NAME` | `PocketHook Assistant` | How the agent introduces itself |
 | `MAX_HISTORY` | `50` | Messages kept in short-term memory per session |
@@ -457,7 +457,7 @@ You can also author custom tools by hand by placing markdown files in `data/user
 
 Granular tool permissions are stored in `permissions.json` (configure via `bun run permissions` or `bun run setup`):
 
-- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_project`, `list_projects`, `delete_project`, `create_once_job`, `create_cron_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`, `start_server`, `stop_server`, `list_servers`, `search_memory`, `remember_fact`, `query_facts`, `load_skill`, `update_memory_status`, `complete_project`, `create_custom_tool`, `create_user_skill`
+- **Enabled tools** — `shell`, `read`, `write`, `ls`, `create_project`, `list_projects`, `delete_project`, `create_once_job`, `create_cron_job`, `list_jobs`, `delete_job`, `web_search`, `web_fetch`, `start_server`, `stop_server`, `list_servers`, `search_memory`, `remember_fact`, `query_facts`, `load_skill`, `update_memory_status`, `complete_project`, `create_custom_tool`, `create_user_skill`, `set_reasoning`
 - **Always-on tools** (not gated by `permissions.json`): `respond_text`, `respond_image`, `respond_buttons`, `respond_shortcut`, `respond_html`, `respond_sequence`, `run_code_job` — all wired to the same response channel so they cannot be missing
 - **Working directory boundary** — Prevents the agent from escaping `WORKING_DIR`
 - **Base-path write guard** — The `write` tool rejects any path under `skills/`, `custom-tools/`, or `config/agent-instructions.md` and redirects the agent to `data/user/*`
