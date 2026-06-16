@@ -14,7 +14,7 @@ import { memoryStats, getDbPath } from "./memory.js";
 import { checkEmbeddingAvailable, configure as configureEmbeddings } from "./embeddings.js";
 import { migrateEmbeddings, configureClassifier } from "./vector-memory.js";
 import { loadPermissions } from "./permissions.js";
-import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, markDelivered } from "./jobs.js";
+import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, getUndeliveredJobSummaries, markDelivered } from "./jobs.js";
 import { getDashboardHtml, getJobsJson, hasDistDashboard, serveDashboardAsset } from "./dashboard.js";
 import { initWorkspaceGit } from "./versioning.js";
 import { cleanupServers } from "./servers.js";
@@ -194,6 +194,19 @@ Bun.serve({
     }
 
     if (req.method === "GET" && url.pathname === "/jobs") {
+      // Content negotiation: newer app builds send `Accept: application/json` to
+      // get the list of pending jobs (id + name) so they can dedupe notifications
+      // and show what each job is about. Older builds get the plain "true"/"false"
+      // boolean unchanged, so polling and health checks keep working either way.
+      const wantsJson = (req.headers.get("Accept") || "").toLowerCase().includes("application/json");
+      if (wantsJson) {
+        const jobs = getUndeliveredJobSummaries();
+        logger.debug("GET /jobs (json)", { count: jobs.length });
+        return new Response(JSON.stringify({ pending: jobs.length > 0, jobs }), {
+          status: 200,
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+        });
+      }
       const pending = hasUndeliveredResults();
       logger.debug("GET /jobs", { pending });
       return new Response(pending ? "true" : "false", { status: 200 });

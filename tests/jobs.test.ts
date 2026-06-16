@@ -192,3 +192,17 @@ describe("job delivery visibility", () => {
     expect(hasUndelivered({ delivered: 0, result: null, error: null })).toBe(false);
   });
 });
+
+describe("undelivered job summary ok flag", () => {
+  // Mirrors the mapping in getUndeliveredJobSummaries: a job is "ok" when it
+  // produced a result; a job that only has an error is a failure.
+  const okFlag = (job: { result: string | null }) => job.result != null;
+
+  test("result present means success", () => {
+    expect(okFlag({ result: "done" })).toBe(true);
+  });
+
+  test("no result (error path) means failure", () => {
+    expect(okFlag({ result: null })).toBe(false);
+  });
+});

@@ -395,6 +395,23 @@ export function markDelivered(ids: number[]): void {
   d.run(`UPDATE jobs SET delivered = 1 WHERE id IN (${placeholders})`, ids);
 }
 
+export interface UndeliveredJobSummary {
+  id: number;
+  name: string;
+  ok: boolean;
+  completed_at: number | null;
+}
+
+// Lightweight view of undelivered jobs for the device's notification poll:
+// just enough to dedupe by id and show a descriptive title — no result payload.
+export function getUndeliveredJobSummaries(): UndeliveredJobSummary[] {
+  const d = getDb();
+  const rows = d.query(
+    "SELECT id, name, result, completed_at FROM jobs WHERE delivered = 0 AND (result IS NOT NULL OR error IS NOT NULL) ORDER BY completed_at ASC",
+  ).all() as { id: number; name: string; result: string | null; completed_at: number | null }[];
+  return rows.map((r) => ({ id: r.id, name: r.name, ok: r.result != null, completed_at: r.completed_at }));
+}
+
 // ── Job execution ────────────────────────────────────────────────────────
 
 function executeShell(command: string, cwd: string, timeoutMs: number = 60_000): Promise<{ ok: boolean; output: string }> {
