@@ -1,7 +1,7 @@
-import { Agent } from "@mariozechner/pi-agent-core";
-import { getModel, getModels } from "@mariozechner/pi-ai";
-import type { AssistantMessage, Model, Api, Message } from "@mariozechner/pi-ai";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Agent } from "@earendil-works/pi-agent-core";
+import { getModel, getModels } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, Model, Api, Message } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Config } from "./config.js";
 import { updateEnvFile } from "./config.js";
 import { createRespondTools, createRunCodeJobTool, type PocketHookResponse } from "./tools.js";
@@ -11,15 +11,15 @@ import { logger } from "./logger.js";
 /**
  * Resolve a Model object from provider + model ID.
  */
-function resolveModel(config: Config): Model<Api> {
+function resolveModelFor(provider: string, modelId: string, baseUrl?: string): Model<Api> {
   try {
-    const model = getModel(config.llmProvider as any, config.llmModel as any);
+    const model = getModel(provider as any, modelId as any);
     if (model) return model;
   } catch {}
 
   try {
-    const models = getModels(config.llmProvider as any);
-    const found = models.find((m) => m.id === config.llmModel);
+    const models = getModels(provider as any);
+    const found = models.find((m) => m.id === modelId);
     if (found) return found;
   } catch {}
 
@@ -44,22 +44,41 @@ function resolveModel(config: Config): Model<Api> {
   };
 
   return {
-    id: config.llmModel,
-    name: config.llmModel,
-    provider: config.llmProvider,
-    api: apiMap[config.llmProvider] || "openai-completions",
-    baseUrl: config.llmBaseUrl || defaultBaseUrls[config.llmProvider] || "",
+    id: modelId,
+    name: modelId,
+    provider,
+    api: apiMap[provider] || "openai-completions",
+    baseUrl: baseUrl || defaultBaseUrls[provider] || "",
     reasoning: false,
     input: ["text"] as ("text" | "image")[],
     maxTokens: 8192,
-    contextWindow: (config.llmProvider === "ollama" || config.llmProvider === "lm-studio") ? 32768 : 128000,
+    contextWindow: (provider === "ollama" || provider === "lm-studio") ? 32768 : 128000,
     maxOutputTokens: 8192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     supportedInputs: ["text"],
   } as Model<Api>;
 }
 
+function resolveModel(config: Config): Model<Api> {
+  return resolveModelFor(config.llmProvider, config.llmModel, config.llmBaseUrl);
+}
+
 let cachedModel: Model<Api> | null = null;
+let cachedQuickModel: Model<Api> | null = null;
+
+/**
+ * The LLM run was cut by a provider error (5xx, overload, timeout) and could
+ * not be completed even after resume attempts. Callers must treat the run as
+ * failed — the chat endpoint reports it, the job runner marks the job failed
+ * so its retry machinery can re-run it — instead of passing partial work off
+ * as a final answer.
+ */
+export class LLMInterruptedError extends Error {
+  constructor(providerError: string) {
+    super(`LLM run interrupted by provider error: ${providerError}`);
+    this.name = "LLMInterruptedError";
+  }
+}
 
 const OAUTH_PROVIDERS = ["openai-codex", "github-copilot"];
 
@@ -78,15 +97,22 @@ async function ensureFreshApiKey(config: Config): Promise<string> {
 
   logger.info(`${config.llmProvider} token expired, refreshing...`);
   try {
-    let creds: { access: string; refresh: string; expires: number };
-
+    let oauth;
     if (config.llmProvider === "github-copilot") {
-      const { refreshGitHubCopilotToken } = await import("@mariozechner/pi-ai/oauth");
-      creds = await refreshGitHubCopilotToken(config.oauthRefreshToken);
+      const { githubCopilotProvider } = await import("@earendil-works/pi-ai/providers/github-copilot");
+      oauth = githubCopilotProvider().auth.oauth;
     } else {
-      const { refreshOpenAICodexToken } = await import("@mariozechner/pi-ai/oauth");
-      creds = await refreshOpenAICodexToken(config.oauthRefreshToken);
+      const { openaiCodexProvider } = await import("@earendil-works/pi-ai/providers/openai-codex");
+      oauth = openaiCodexProvider().auth.oauth;
     }
+    if (!oauth) throw new Error(`Provider '${config.llmProvider}' has no OAuth flow`);
+
+    const creds = await oauth.refresh({
+      type: "oauth",
+      access: config.llmApiKey,
+      refresh: config.oauthRefreshToken,
+      expires: config.oauthTokenExpires ?? 0,
+    });
 
     config.llmApiKey = creds.access;
     config.oauthRefreshToken = creds.refresh;
@@ -105,39 +131,70 @@ async function ensureFreshApiKey(config: Config): Promise<string> {
 }
 
 /**
+ * Resolve the API key for the quick model. Same provider as the main model →
+ * reuse its credentials (including OAuth auto-refresh, no separate login);
+ * different provider → its own key (local providers accept a placeholder).
+ */
+async function ensureFreshQuickApiKey(config: Config): Promise<string> {
+  if (config.llmQuickProvider === config.llmProvider) {
+    return ensureFreshApiKey(config);
+  }
+  return config.llmQuickApiKey || config.llmQuickProvider;
+}
+
+/**
  * Quick single-turn prompt — no tools, no agent, minimal tokens.
  * Used for classification, entity extraction, and other lightweight LLM tasks.
+ * Runs on the quick model (llmQuick* config), which defaults to the main
+ * chat model with reasoning off.
  */
 export async function quickPrompt(config: Config, prompt: string, maxTokens: number = 100): Promise<string> {
-  if (!cachedModel) {
-    cachedModel = resolveModel(config);
+  if (!cachedQuickModel) {
+    cachedQuickModel = resolveModelFor(
+      config.llmQuickProvider,
+      config.llmQuickModel,
+      config.llmQuickBaseUrl ?? (config.llmQuickProvider === config.llmProvider ? config.llmBaseUrl : undefined),
+    );
+    logger.info(`Quick LLM resolved: ${cachedQuickModel.provider}/${cachedQuickModel.id} (api: ${cachedQuickModel.api}, reasoning: ${config.llmQuickReasoning})`);
   }
+  const model = cachedQuickModel;
 
-  const apiKey = await ensureFreshApiKey(config);
+  const apiKey = await ensureFreshQuickApiKey(config);
 
-  const agent = new Agent({
-    initialState: {
-      systemPrompt: "You are a JSON classifier. Respond ONLY with valid JSON, no other text.",
-      model: cachedModel,
-      tools: [],
-      messages: [],
-    },
-    getApiKey: async () => apiKey,
-  });
-  if (config.llmReasoning !== "off") agent.setThinkingLevel(config.llmReasoning);
+  // One retry on stream errors (provider 5xx etc.); tool-free, so retrying is safe.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const agent = new Agent({
+      initialState: {
+        systemPrompt: "You are a JSON classifier. Respond ONLY with valid JSON, no other text.",
+        model,
+        tools: [],
+        messages: [],
+        thinkingLevel: config.llmQuickReasoning,
+      },
+      getApiKey: async () => apiKey,
+    });
 
-  const result = await agent.prompt(prompt);
+    await agent.prompt(prompt);
 
-  // Extract text from the last assistant message
-  const messages = agent.state.messages;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg || msg.role !== "assistant") continue;
-    const text = (msg as AssistantMessage).content
-      .filter((c) => c.type === "text")
-      .map((c) => (c as { type: "text"; text: string }).text)
-      .join("");
-    if (text) return text;
+    if (agent.state.errorMessage) {
+      logger.warn(`quickPrompt turn ended with stream error${attempt === 0 ? ", retrying" : ""}`, { error: agent.state.errorMessage });
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        continue;
+      }
+    }
+
+    // Extract text from the last assistant message
+    const messages = agent.state.messages;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (!msg || msg.role !== "assistant") continue;
+      const text = (msg as AssistantMessage).content
+        .filter((c) => c.type === "text")
+        .map((c) => (c as { type: "text"; text: string }).text)
+        .join("");
+      if (text) return text;
+    }
   }
 
   return "";
@@ -156,6 +213,7 @@ export async function chat(
     cachedModel = resolveModel(config);
     logger.info(`LLM resolved: ${cachedModel.provider}/${cachedModel.id} (api: ${cachedModel.api}, reasoning: ${config.llmReasoning})`);
   }
+  const model = cachedModel;
 
   const apiKey = await ensureFreshApiKey(config);
 
@@ -171,17 +229,6 @@ export async function chat(
 
   const allTools = [...tools, ...respondTools, runCodeJobTool];
 
-  const agent = new Agent({
-    initialState: {
-      systemPrompt,
-      model: cachedModel,
-      tools: allTools,
-      messages: [...messages.slice(0, -1)],
-    },
-    getApiKey: async () => apiKey,
-  });
-  if (config.llmReasoning !== "off") agent.setThinkingLevel(config.llmReasoning);
-
   // Get last user message text
   const lastMessage = messages[messages.length - 1];
   if (!lastMessage || lastMessage.role !== "user") {
@@ -195,12 +242,101 @@ export async function chat(
         .map((c) => (c as { type: "text"; text: string }).text)
         .join("");
 
+  const makeAgent = () => new Agent({
+    initialState: {
+      systemPrompt,
+      model,
+      tools: allTools,
+      messages: [...messages.slice(0, -1)],
+      thinkingLevel: config.llmReasoning,
+    },
+    getApiKey: async () => apiKey,
+  });
+
+  let agent = makeAgent();
   // Boundary so the fallback below cannot pick up text from prior turns.
-  const turnStartIdx = agent.state.messages.length;
+  let turnStartIdx = agent.state.messages.length;
 
-  await agent.prompt(userText);
+  // Stream failures (timeout, rate limit, provider 5xx) don't throw: the agent
+  // ends the turn with stopReason "error" and the reason in state.errorMessage.
+  // Retry with a fresh agent (clean transcript), but only while the failed
+  // attempt executed no tools — otherwise side effects could run twice.
+  const MAX_STREAM_RETRIES = 2;
+  for (let attempt = 0; ; attempt++) {
+    await agent.prompt(userText);
+    const streamError = agent.state.errorMessage;
+    if (pockethookResponses || !streamError) break;
 
-  // If the LLM called respond tool, use that
+    const attemptRanTools = agent.state.messages
+      .slice(turnStartIdx)
+      .some((m) => m.role === "assistant"
+        && (m as AssistantMessage).content.some((c) => c.type === "toolCall"));
+    if (attempt >= MAX_STREAM_RETRIES || attemptRanTools) {
+      logger.warn("LLM turn ended with stream error, not retrying", {
+        error: streamError,
+        attempt: attempt + 1,
+        ranTools: attemptRanTools,
+      });
+      break;
+    }
+
+    logger.warn(`LLM stream error, retrying (${attempt + 1}/${MAX_STREAM_RETRIES})`, { error: streamError });
+    await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+    agent = makeAgent();
+    turnStartIdx = agent.state.messages.length;
+  }
+
+  // Turn interrupted mid-work by a provider error (tools already ran, or the
+  // fresh retries above are exhausted). Ask the model to RESUME the task —
+  // tools allowed — instead of forcing a premature reply: the transcript is
+  // preserved, so tool calls that already succeeded are not repeated.
+  if (!pockethookResponses && agent.state.errorMessage) {
+    const RESUME_ATTEMPTS = 2;
+    for (let attempt = 0; attempt < RESUME_ATTEMPTS && !pockethookResponses; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000 * (attempt + 1)));
+      logger.warn(`LLM turn interrupted by stream error, asking it to resume (${attempt + 1}/${RESUME_ATTEMPTS})`);
+      try {
+        await agent.prompt(
+          "Your previous turn was interrupted by a temporary provider error mid-task. " +
+          "Continue the task exactly where you left off — do not repeat work that already succeeded. " +
+          "When the task is genuinely finished, call exactly ONE respond_* tool with the final answer.",
+        );
+      } catch (err) {
+        logger.warn("Resume attempt failed", { error: err instanceof Error ? err.message : String(err) });
+      }
+      if (!agent.state.errorMessage) break; // ended cleanly; a missing respond_* is handled below
+    }
+
+    if (!pockethookResponses && agent.state.errorMessage) {
+      // Still failing after resume attempts — surface an honest failure so the
+      // chat endpoint can report it and the job runner can mark the job failed
+      // and retry, instead of passing partial work off as a final answer.
+      throw new LLMInterruptedError(agent.state.errorMessage);
+    }
+  }
+
+  // Codex-family models (gpt-5.x-codex) sometimes end a turn after chained
+  // tool calls without ever calling respond_*. Nudge once before falling
+  // back, so the user gets a properly-typed reply (buttons/shortcut/image/etc.)
+  // instead of plain text or a generic error. Only reached after a turn that
+  // ended cleanly — interrupted turns resume above instead.
+  if (!pockethookResponses) {
+    logger.warn("LLM finished without respond_*, requesting one via steering prompt");
+    try {
+      await agent.prompt(
+        "Your previous turn ended without sending a reply to the user. " +
+        "Call exactly ONE respond_* tool NOW with the answer: respond_text for a normal message, " +
+        "respond_buttons for choices, respond_image for an image URL, respond_shortcut for an iOS Shortcut, " +
+        "respond_html for rich HTML, or respond_sequence to chain steps. Do not call any other tool first."
+      );
+    } catch (err) {
+      logger.warn("Steering retry failed", { error: err instanceof Error ? err.message : String(err) });
+    }
+    if (agent.state.errorMessage) {
+      logger.warn("Steering turn ended with stream error", { error: agent.state.errorMessage });
+    }
+  }
+
   if (pockethookResponses) {
     return pockethookResponses;
   }
@@ -221,6 +357,12 @@ export async function chat(
       logger.warn("LLM did not call respond tool, using fallback text");
       return [{ msg: text }];
     }
+  }
+
+  // No usable output at all. If the last attempt died on a provider error,
+  // report that honestly rather than blaming the model's tool support.
+  if (agent.state.errorMessage) {
+    throw new LLMInterruptedError(agent.state.errorMessage);
   }
 
   const turnAssistantCount = allMessages.slice(turnStartIdx).filter((m) => m?.role === "assistant").length;

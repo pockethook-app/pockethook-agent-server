@@ -99,39 +99,29 @@ type ProviderEntry = (typeof PROVIDERS)[number];
 
 // ── OAuth flows ──────────────────────────────────────────────────────────
 
-async function runCodexOAuth(): Promise<{ access: string; refresh: string; expires: number }> {
-  const { loginOpenAICodex } = await import("@mariozechner/pi-ai/oauth");
-  let openFn: ((url: string) => Promise<unknown>) | null = null;
-  try {
-    const mod = await import("open");
-    openFn = mod.default;
-  } catch {}
+type OAuthFlow = import("@earendil-works/pi-ai").OAuthAuth;
 
-  const s = p.spinner();
-  return loginOpenAICodex({
-    onAuth: (info) => {
-      if (openFn) {
-        openFn(info.url).catch(() => {});
-      }
-      p.note(info.url, "Open this URL to authenticate with ChatGPT");
-      s.start("Waiting for authentication...");
-    },
-    onPrompt: async (pr) => {
-      s.stop();
-      const val = await p.text({ message: pr.message });
-      if (p.isCancel(val)) cancelled();
-      s.start("Waiting for authentication...");
-      return val;
-    },
-    onProgress: (msg) => s.message(msg),
-  }).then((creds) => {
-    s.stop("Authenticated!");
-    return { access: creds.access, refresh: creds.refresh, expires: creds.expires };
-  });
+async function loadOAuthFlow(provider: "openai-codex" | "github-copilot"): Promise<OAuthFlow> {
+  let oauth: OAuthFlow | undefined;
+  if (provider === "github-copilot") {
+    const { githubCopilotProvider } = await import("@earendil-works/pi-ai/providers/github-copilot");
+    oauth = githubCopilotProvider().auth.oauth;
+  } else {
+    const { openaiCodexProvider } = await import("@earendil-works/pi-ai/providers/openai-codex");
+    oauth = openaiCodexProvider().auth.oauth;
+  }
+  if (!oauth) {
+    p.log.error(`Provider '${provider}' has no OAuth flow.`);
+    process.exit(1);
+  }
+  return oauth;
 }
 
-async function runCopilotOAuth(): Promise<{ access: string; refresh: string; expires: number }> {
-  const { loginGitHubCopilot } = await import("@mariozechner/pi-ai/oauth");
+async function runOAuthLogin(
+  provider: "openai-codex" | "github-copilot",
+  noteTitle: string,
+): Promise<{ access: string; refresh: string; expires: number }> {
+  const oauth = await loadOAuthFlow(provider);
   let openFn: ((url: string) => Promise<unknown>) | null = null;
   try {
     const mod = await import("open");
@@ -139,27 +129,59 @@ async function runCopilotOAuth(): Promise<{ access: string; refresh: string; exp
   } catch {}
 
   const s = p.spinner();
-  return loginGitHubCopilot({
-    onAuth: (url, instructions) => {
-      if (openFn) {
-        openFn(url).catch(() => {});
+  const creds = await oauth.login({
+    notify: (event) => {
+      switch (event.type) {
+        case "auth_url":
+          if (openFn) {
+            openFn(event.url).catch(() => {});
+          }
+          p.note(event.url, noteTitle);
+          s.start("Waiting for authentication...");
+          break;
+        case "device_code":
+          if (openFn) {
+            openFn(event.verificationUri).catch(() => {});
+          }
+          p.note(`${event.verificationUri}\n\nCode: ${event.userCode}`, noteTitle);
+          s.start("Waiting for authentication...");
+          break;
+        case "progress":
+          s.message(event.message);
+          break;
+        case "info":
+          p.log.info(event.message);
+          break;
       }
-      const msg = instructions ? `${url}\n\n${instructions}` : url;
-      p.note(msg, "Open this URL to authenticate with GitHub");
-      s.start("Waiting for authentication...");
     },
-    onPrompt: async (pr) => {
+    prompt: async (pr) => {
       s.stop();
-      const val = await p.text({ message: pr.message });
+      let val: string | symbol;
+      if (pr.type === "select") {
+        val = await p.select({
+          message: pr.message,
+          options: pr.options.map((o) => ({ value: o.id, label: o.label, hint: o.description })),
+        });
+      } else if (pr.type === "secret") {
+        val = await p.password({ message: pr.message });
+      } else {
+        val = await p.text({ message: pr.message, placeholder: pr.placeholder });
+      }
       if (p.isCancel(val)) cancelled();
       s.start("Waiting for authentication...");
-      return val;
+      return val as string;
     },
-    onProgress: (msg) => s.message(msg),
-  }).then((creds) => {
-    s.stop("Authenticated!");
-    return { access: creds.access, refresh: creds.refresh, expires: creds.expires };
   });
+  s.stop("Authenticated!");
+  return { access: creds.access, refresh: creds.refresh, expires: creds.expires };
+}
+
+function runCodexOAuth(): Promise<{ access: string; refresh: string; expires: number }> {
+  return runOAuthLogin("openai-codex", "Open this URL to authenticate with ChatGPT");
+}
+
+function runCopilotOAuth(): Promise<{ access: string; refresh: string; expires: number }> {
+  return runOAuthLogin("github-copilot", "Open this URL and enter the code to authenticate with GitHub");
 }
 
 // ── Shared: select provider + auth ───────────────────────────────────────
@@ -173,7 +195,8 @@ async function selectReasoning(env: Record<string, string>): Promise<void> {
       { value: "low", label: "low", hint: "small budget" },
       { value: "medium", label: "medium", hint: "balanced (Anthropic / OpenAI default-ish)" },
       { value: "high", label: "high", hint: "deeper thinking, ~3-5× output cost" },
-      { value: "xhigh", label: "xhigh", hint: "highest budget where supported" },
+      { value: "xhigh", label: "xhigh", hint: "very high budget where supported" },
+      { value: "max", label: "max", hint: "highest budget where supported (e.g. gpt-5.6)" },
     ],
     initialValue: env.LLM_REASONING || "off",
   });
@@ -243,6 +266,117 @@ async function configureAuth(provider: ProviderEntry, env: Record<string, string
     // Clean OAuth keys when switching to API key provider
     delete env.OAUTH_REFRESH_TOKEN;
     delete env.OAUTH_TOKEN_EXPIRES;
+  }
+}
+
+// ── Quick model (memory helper) ──────────────────────────────────────────
+
+const QUICK_MODEL_SUGGESTIONS: Record<string, string> = {
+  "openai-codex": "gpt-5.6-luna",
+  openai: "gpt-5.6-luna",
+  anthropic: "claude-haiku-4-5",
+  google: "gemini-2.5-flash",
+};
+
+async function configureQuickModel(env: Record<string, string>): Promise<void> {
+  p.note(
+    "Besides the chat model, PocketHook uses a second lightweight LLM\n" +
+    "(the \"quick model\") for internal memory chores: classifying each\n" +
+    "message into the memory graph and extracting entities to focus\n" +
+    "memory search. It runs ~3 tiny prompts per chat message and never\n" +
+    "writes chat replies — a small, fast, cheap model is ideal.",
+    "Quick model",
+  );
+
+  const mainProvider = env.LLM_PROVIDER || "";
+
+  const choice = await p.select({
+    message: "Which model should handle quick memory tasks?",
+    options: [
+      { value: "custom", label: "A different (smaller/faster) model", hint: "recommended" },
+      { value: "same", label: "Same as the chat model", hint: "no extra setup, but slower and pricier per message" },
+    ],
+    initialValue: env.LLM_QUICK_MODEL ? "custom" : "same",
+  });
+  if (p.isCancel(choice)) cancelled();
+
+  if (choice === "same") {
+    delete env.LLM_QUICK_PROVIDER;
+    delete env.LLM_QUICK_MODEL;
+    delete env.LLM_QUICK_API_KEY;
+    delete env.LLM_QUICK_BASE_URL;
+  } else {
+    // OAuth providers can't do a second independent login, so they are only
+    // offered when they match the main provider (credentials are shared).
+    const options = PROVIDERS
+      .filter((pr) => !pr.auth.startsWith("oauth") || pr.key === mainProvider)
+      .map((pr) => ({
+        value: pr.key as string,
+        label: pr.name as string,
+        hint: pr.key === mainProvider ? "same as chat — reuses your login, no extra auth" : undefined,
+      }));
+    const providerKey = await p.select({
+      message: "Quick model provider",
+      options,
+      initialValue: env.LLM_QUICK_PROVIDER || mainProvider,
+    });
+    if (p.isCancel(providerKey)) cancelled();
+    const provider = PROVIDERS.find((pr) => pr.key === providerKey)!;
+
+    const model = await p.text({
+      message: "Quick model ID",
+      initialValue: env.LLM_QUICK_MODEL
+        || QUICK_MODEL_SUGGESTIONS[provider.key]
+        || provider.defaultModel,
+    });
+    if (p.isCancel(model)) cancelled();
+
+    env.LLM_QUICK_PROVIDER = provider.key;
+    env.LLM_QUICK_MODEL = model;
+
+    if (provider.key === mainProvider) {
+      p.log.info("Same provider as the chat model — reusing its credentials, no new login needed.");
+      delete env.LLM_QUICK_API_KEY;
+      delete env.LLM_QUICK_BASE_URL;
+    } else if (provider.auth === "none") {
+      const defaultUrl = provider.key === "lm-studio"
+        ? "http://localhost:1234/v1"
+        : "http://localhost:11434/v1";
+      const baseUrl = await p.text({
+        message: `${provider.name} base URL`,
+        initialValue: env.LLM_QUICK_BASE_URL || defaultUrl,
+      });
+      if (p.isCancel(baseUrl)) cancelled();
+      env.LLM_QUICK_BASE_URL = baseUrl;
+      delete env.LLM_QUICK_API_KEY;
+    } else {
+      const apiKey = await p.password({
+        message: `${provider.name} API key (for the quick model)`,
+      });
+      if (p.isCancel(apiKey)) cancelled();
+      env.LLM_QUICK_API_KEY = apiKey;
+      delete env.LLM_QUICK_BASE_URL;
+    }
+  }
+
+  const level = await p.select({
+    message: "Reasoning effort for the quick model",
+    options: [
+      { value: "off", label: "off", hint: "recommended — quick tasks are simple JSON classification" },
+      { value: "minimal", label: "minimal", hint: "tiny budget, slight extra cost" },
+      { value: "low", label: "low", hint: "small budget" },
+      { value: "medium", label: "medium", hint: "balanced" },
+      { value: "high", label: "high", hint: "deeper thinking — rarely useful here" },
+      { value: "xhigh", label: "xhigh", hint: "very high budget where supported" },
+      { value: "max", label: "max", hint: "highest budget where supported (e.g. gpt-5.6)" },
+    ],
+    initialValue: env.LLM_QUICK_REASONING || "off",
+  });
+  if (p.isCancel(level)) cancelled();
+  if (level === "off") {
+    delete env.LLM_QUICK_REASONING;
+  } else {
+    env.LLM_QUICK_REASONING = level as string;
   }
 }
 
@@ -391,6 +525,8 @@ async function setup() {
   }
 
   await configureAuth(provider, env);
+
+  await configureQuickModel(env);
 
   // Locale (optional)
   const configLocale = await p.confirm({
@@ -570,6 +706,8 @@ async function switchProvider() {
 
   await configureAuth(provider, env);
 
+  await configureQuickModel(env);
+
   writeEnv(env);
   p.outro(`${pc.green("Done!")} Restart the server to apply changes.`);
   process.exit(0);
@@ -593,19 +731,19 @@ async function refreshToken() {
   s.start("Refreshing token...");
 
   try {
-    let creds: { access: string; refresh: string; expires: number };
-
-    if (provider === "github-copilot") {
-      const { refreshGitHubCopilotToken } = await import("@mariozechner/pi-ai/oauth");
-      creds = await refreshGitHubCopilotToken(refreshTk);
-    } else if (provider === "openai-codex") {
-      const { refreshOpenAICodexToken } = await import("@mariozechner/pi-ai/oauth");
-      creds = await refreshOpenAICodexToken(refreshTk);
-    } else {
+    if (provider !== "github-copilot" && provider !== "openai-codex") {
       s.stop();
       p.log.error(`Provider '${provider}' does not use OAuth.`);
       process.exit(1);
     }
+
+    const oauth = await loadOAuthFlow(provider);
+    const creds = await oauth.refresh({
+      type: "oauth",
+      access: env.LLM_API_KEY || "",
+      refresh: refreshTk,
+      expires: Number(env.OAUTH_TOKEN_EXPIRES) || 0,
+    });
 
     env.LLM_API_KEY = creds.access;
     env.OAUTH_REFRESH_TOKEN = creds.refresh;
@@ -721,6 +859,7 @@ async function configurePermissions() {
       { value: "delete_job", label: "delete_job", hint: "Delete background jobs" },
       { value: "web_search", label: "web_search", hint: "Search the web" },
       { value: "web_fetch", label: "web_fetch", hint: "Fetch and read web pages" },
+      { value: "safari", label: "safari", hint: "Control a paired PocketHook Safari extension" },
       { value: "remember_fact", label: "remember_fact", hint: "Store facts in knowledge graph (requires semantic memory)" },
       { value: "query_facts", label: "query_facts", hint: "Query facts from knowledge graph (requires semantic memory)" },
       { value: "load_skill", label: "load_skill", hint: "Load full content of a skill on demand (recommended)" },
@@ -785,6 +924,49 @@ function parseList(input: string): string[] {
     .filter(Boolean);
 }
 
+// ── Safari extension ─────────────────────────────────────────────────────
+// Optional: the extension works with defaults if this is never run.
+
+async function configureSafari(): Promise<void> {
+  const env = readEnv();
+  const port = env.PORT || "3000";
+
+  p.note(
+    `Pairing endpoint (popup "Server address"): ws://127.0.0.1:${port}/safari-extension\n` +
+    `Generate a one-time pairing code with:      bun run safari:code`,
+    "PocketHook Safari extension",
+  );
+
+  const level = await p.select({
+    message: "Permission level for the paired extension",
+    initialValue: env.SAFARI_PERMISSION_LEVEL || "confirm",
+    options: [
+      { value: "confirm", label: "Confirm", hint: "clicks with external effects ask the user first (default)" },
+      { value: "autonomous", label: "Autonomous", hint: "votes, follows, submits without asking; payments, deletions and account changes still ask" },
+      { value: "readonly", label: "Read-only", hint: "navigate, inspect and capture only; click and fill disabled" },
+    ],
+  });
+  if (p.isCancel(level)) cancelled();
+  env.SAFARI_PERMISSION_LEVEL = String(level);
+
+  const captures = await p.text({
+    message: `Public base URL for serving captures (Enter to keep, "-" to clear)`,
+    initialValue: env.SAFARI_CAPTURES_BASE_URL || "",
+    placeholder: `empty = http://127.0.0.1:${port} (local only)`,
+    validate: (value) => {
+      if (!value || value === "-") return;
+      try { new URL(value); } catch { return `Must be a valid URL, or "-" to clear.`; }
+    },
+  });
+  if (p.isCancel(captures)) cancelled();
+  const capturesValue = String(captures ?? "").trim();
+  if (capturesValue === "-") delete env.SAFARI_CAPTURES_BASE_URL;
+  else if (capturesValue) env.SAFARI_CAPTURES_BASE_URL = capturesValue;
+
+  writeEnv(env);
+  p.log.success(`Saved to .env — SAFARI_PERMISSION_LEVEL=${env.SAFARI_PERMISSION_LEVEL}${env.SAFARI_CAPTURES_BASE_URL ? `, SAFARI_CAPTURES_BASE_URL=${env.SAFARI_CAPTURES_BASE_URL}` : ""}`);
+}
+
 // ── Entry point ──────────────────────────────────────────────────────────
 
 if (process.argv.includes("--personality")) {
@@ -816,6 +998,17 @@ if (process.argv.includes("--personality")) {
   });
 } else if (process.argv.includes("--refresh")) {
   refreshToken().catch((err) => {
+    p.log.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+} else if (process.argv.includes("--safari")) {
+  (async () => {
+    console.clear();
+    console.log(BANNER);
+    p.intro(pc.bgBlue(pc.black(" safari ")));
+    await configureSafari();
+    p.outro(pc.green("Done!") + " Restart the server to apply changes: bun run service restart");
+  })().catch((err) => {
     p.log.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   });

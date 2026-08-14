@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0 — 2026-08-14
+
+### Features
+
+- **Safari extension support (`safari` tool)** — Control a paired PocketHook Safari Web Extension: open/navigate/close tabs, inspect pages (up to 120 visible controls with stable locators, semantic attributes and state), `find_text` across labels AND identifying attributes with ranked multi-match results, click with a full synthetic pointer/mouse event sequence (React-compatible) and post-click `state_changed` verification, React-safe `fill`, scrolling, and screenshots served as URLs the app renders inline. Commands are delivered exclusively through a native-messaging poll queue (a WebSocket acts only as a wake-up nudge — sockets can zombie after Safari suspends the extension); queued commands expire after 20s so nothing executes late. Pairing uses one-time codes (5 min TTL) and per-installation credentials persisted in `data/safari-extension.json`.
+- **Configurable Safari permission level** — `SAFARI_PERMISSION_LEVEL`: `confirm` (default — clicks with external effects require explicit user confirmation), `autonomous` (votes/follows/submits run without asking; payments, permanent deletions and account/security changes still ask), `readonly` (navigate, inspect and capture only). Enforced in the tool itself, and the tool description the model sees adapts to the level.
+- **New commands** — `bun run help` (grouped overview of every command, flags undocumented scripts automatically), `bun run config` (current configuration at a glance, secrets masked, defaults shown for unset vars), `bun run safari:config` (optional, skippable: permission level + captures base URL), `bun run safari:code` (one-time pairing code + popup endpoint), `bun run safari:status` (paired installations and live connection state).
+- **Quick model** — `LLM_QUICK_PROVIDER/MODEL/API_KEY/BASE_URL/REASONING`: a lightweight secondary model for internal helpers (message classification, memory entity extraction). Defaults to the main model with reasoning off; shares credentials (including OAuth refresh) when the provider matches. Configurable in `setup`/`switch`.
+- **`max` reasoning level** — added to `REASONING_VALUES`, the setup selector, and the `set_reasoning` tool.
+
+### Fixes & robustness
+
+- **pi 0.57.1 → @earendil-works 0.80.10** — migrated to the `@earendil-works/pi-ai` / `pi-agent-core` scope (supports GPT 5.6-class models). `Provider` type → `ProviderId`; `getModel/getModels` from `pi-ai/compat`; OAuth login/refresh rewritten to the new `OAuthAuth` API.
+- **Stream-error retries** — `chat()` retries up to 2× with a fresh Agent when the provider fails mid-stream and no tools have run (side-effect safety); `quickPrompt` retries 1×; pi's swallowed stream errors (`agent.state.errorMessage`) are now logged.
+- **Interrupted-turn handling** — if a stream dies after tools already ran, the turn is resumed with a steering prompt (tools allowed, 2 attempts with backoff) instead of being forced to answer without tools (which used to drop pending work). If it still fails, jobs are marked failed and requeued by the existing retry mechanism.
+
 ## 0.5.0 — 2026-06-10
 
 ### Features

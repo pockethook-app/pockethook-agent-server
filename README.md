@@ -62,7 +62,9 @@ bun run tunnel    # HTTPS tunnel in another terminal
 
 | Command | Description |
 |---------|-------------|
+| `bun run help` | Overview of every command |
 | `bun run setup` | Full interactive setup |
+| `bun run config` | Show current configuration (secrets masked) |
 | `bun run switch` | Change LLM provider/model |
 | `bun run personality` | Configure agent personality and emoji usage |
 | `bun run permissions` | Configure tool permissions |
@@ -78,6 +80,9 @@ bun run tunnel    # HTTPS tunnel in another terminal
 | `bun run service uninstall` | Remove the service |
 | `bun run service status` | Show service status |
 | `bun run logs` | Stream service logs (cross-platform) |
+| `bun run safari:config` | Safari extension: permission level and captures URL (optional) |
+| `bun run safari:code` | Safari extension: generate a one-time pairing code |
+| `bun run safari:status` | Safari extension: paired installations and connection state |
 
 ## Configuration
 
@@ -115,6 +120,12 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | `EMBEDDING_API_KEY` | — | API key for OpenAI embeddings (not needed for Ollama/LM Studio) |
 | `TOOLS` | `all` | Enabled tools (see Permissions) |
 | `INSTANCE_NAME` | (project dir basename, with `pockethook-` prefix stripped) | Suffix used for the system service label, log directory, and process matching. Set explicitly when running multiple checkouts on the same machine. |
+| `LLM_QUICK_PROVIDER` | same as `LLM_PROVIDER` | Provider for the quick model (internal helpers: classification, memory extraction) |
+| `LLM_QUICK_MODEL` | same as `LLM_MODEL` | Quick model ID |
+| `LLM_QUICK_REASONING` | `off` | Reasoning level for the quick model |
+| `LLM_QUICK_API_KEY` / `LLM_QUICK_BASE_URL` | (shared) | Only needed when the quick provider differs from the main one |
+| `SAFARI_PERMISSION_LEVEL` | `confirm` | Safari extension click policy: `confirm`, `autonomous`, or `readonly` (see Safari extension) |
+| `SAFARI_CAPTURES_BASE_URL` | local only | Public base URL for serving page captures to the app |
 
 ### Supported providers
 
@@ -131,6 +142,30 @@ All configuration is stored in `.env` (created by `bun run setup`):
 | OpenRouter | API key | `anthropic/claude-sonnet-4` |
 | Ollama (local) | None | `llama3.2` |
 | LM Studio (local) | None | `qwen3.5-4b-mlx` |
+
+## Safari extension
+
+The `safari` tool lets the agent control a paired [PocketHook Safari Web Extension](https://github.com/pockethook-app) on the user's Mac: open, navigate and close tabs, inspect pages, click, fill, scroll, and take screenshots. All configuration is optional — the tool works out of the box once an extension is paired.
+
+**Pairing**
+
+1. Run `bun run safari:code` — prints a one-time code (expires in 5 minutes) and the endpoint to enter in the extension popup.
+2. Open the extension popup in Safari, enter the code, press *Pair*.
+3. `bun run safari:status` shows paired installations and live connection state. Pairing credentials persist in `data/safari-extension.json` and survive server restarts.
+
+**Permission levels** (`bun run safari:config`, or `SAFARI_PERMISSION_LEVEL` in `.env`)
+
+| Level | Behavior |
+|-------|----------|
+| `confirm` (default) | Clicks with external effects (vote, submit, publish, purchase…) require explicit user confirmation immediately before each click |
+| `autonomous` | Votes, follows, likes and submits run without asking; payments, permanent deletions, and account/security changes still require confirmation |
+| `readonly` | Navigate, inspect, find and capture only — click and fill are disabled |
+
+**Security model**
+
+- The extension only connects to loopback addresses; pairing codes are single-use and short-lived; the issued credential is stored in extension local storage and checked with constant-time comparison.
+- Commands are delivered through a polled queue with a 20-second TTL — a command the extension did not pick up in time never executes late.
+- Page screenshots are stored under `data/safari-captures/` with unguessable names and served at `/safari-extension/capture/<id>.png`; set `SAFARI_CAPTURES_BASE_URL` only if you expose the server on a private network (e.g. Tailscale) so the app can render them.
 
 ## API Endpoints
 

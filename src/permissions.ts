@@ -42,7 +42,7 @@ export interface Permissions {
 // ── Defaults ─────────────────────────────────────────────────────────────
 
 export const DEFAULT_PERMISSIONS: Permissions = {
-  tools: ["shell", "read", "write", "ls", "create_project", "list_projects", "delete_project", "create_once_job", "create_cron_job", "list_jobs", "delete_job", "web_search", "web_fetch", "start_server", "stop_server", "list_servers"],
+  tools: ["shell", "read", "write", "ls", "create_project", "list_projects", "delete_project", "create_once_job", "create_cron_job", "list_jobs", "delete_job", "web_search", "web_fetch", "start_server", "stop_server", "list_servers", "safari"],
   shell: {
     blockedCommands: [
       "rm -rf /",

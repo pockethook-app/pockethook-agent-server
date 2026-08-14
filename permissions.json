@@ -24,7 +24,8 @@
     "complete_project",
     "create_custom_tool",
     "create_user_skill",
-    "set_reasoning"
+    "set_reasoning",
+    "safari"
   ],
   "shell": {
     "blockedCommands": ["shutdown", "reboot", "halt", "mkfs", "dd", "passwd", "chown", "chmod"],

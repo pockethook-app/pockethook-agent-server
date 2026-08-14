@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "crypto";
 import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "pockethook-sdk";
 import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale, getSkillTarget, getSyncAppForShortcut } from "./config.js";
-import { chat } from "./llm.js";
+import { chat, LLMInterruptedError } from "./llm.js";
 import { createTools, type PocketHookResponse } from "./tools.js";
 import {
   buildContext,
@@ -20,6 +20,19 @@ import { initWorkspaceGit } from "./versioning.js";
 import { cleanupServers } from "./servers.js";
 import { checkRateLimit, configureRateLimit } from "./rate-limit.js";
 import { logger } from "./logger.js";
+import {
+  createSafariPairingCode,
+  pairSafariInstallation,
+  pollSafariExtension,
+  readSafariCapture,
+  recordSafariExtensionResult,
+  getSafariExtensionResult,
+  dispatchSafariExtensionCommand,
+  handleSafariExtensionMessage,
+  removeSafariExtensionSocket,
+  safariExtensionStatus,
+  type SafariExtensionCommand,
+} from "./safari-extension.js";
 
 const config = loadConfig();
 
@@ -105,6 +118,15 @@ setInterval(() => {
 
 const API_VERSION = "1";
 
+function isAuthorized(req: Request): boolean {
+  const token = extractBearerToken(req.headers.get("Authorization"));
+  return Boolean(
+    token &&
+    token.length === config.authToken.length &&
+    timingSafeEqual(Buffer.from(token), Buffer.from(config.authToken)),
+  );
+}
+
 // ── Server-side shortcut execution (macOS only) ─────────────────────────
 
 const IS_MACOS = process.platform === "darwin";
@@ -183,11 +205,19 @@ async function processServerSideShortcuts(
   return processed;
 }
 
-Bun.serve({
+const server = Bun.serve({
   port: config.port,
 
   async fetch(req) {
     const url = new URL(req.url);
+
+    if (url.pathname === "/safari-extension") {
+      if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+        return new Response("Expected WebSocket upgrade", { status: 426 });
+      }
+      if (server.upgrade(req)) return undefined;
+      return new Response("WebSocket upgrade failed", { status: 400 });
+    }
 
     if (req.method === "GET" && url.pathname === "/health") {
       return new Response("true", { status: 200, headers: { "X-API-Version": API_VERSION } });
@@ -246,16 +276,84 @@ Bun.serve({
       });
     }
 
+    if (url.pathname.startsWith("/safari-extension/")) {
+      if (req.method === "POST" && url.pathname === "/safari-extension/native/pair") {
+        try {
+          const body = await req.json() as { installationId?: string; code?: string };
+          if (!body.installationId || !body.code) return Response.json({ error: "installationId and code are required" }, { status: 400 });
+          return Response.json(pairSafariInstallation(body.installationId, body.code));
+        } catch (error) {
+          return Response.json({ error: error instanceof Error ? error.message : "Pairing failed" }, { status: 400 });
+        }
+      }
+      if (req.method === "POST" && url.pathname === "/safari-extension/native/poll") {
+        try {
+          const body = await req.json() as { installationId?: string; credential?: string };
+          if (!body.installationId || !body.credential) return Response.json({ error: "installationId and credential are required" }, { status: 400 });
+          return Response.json(pollSafariExtension(body.installationId, body.credential));
+        } catch (error) {
+          return Response.json({ error: error instanceof Error ? error.message : "Polling failed" }, { status: 401 });
+        }
+      }
+      if (req.method === "POST" && url.pathname === "/safari-extension/native/result") {
+        try {
+          const body = await req.json() as { installationId?: string; credential?: string; requestId?: string; ok?: boolean; result?: unknown; resultJson?: string; error?: string };
+          if (!body.installationId || !body.credential || !body.requestId || typeof body.ok !== "boolean") {
+            return Response.json({ error: "installationId, credential, requestId and ok are required" }, { status: 400 });
+          }
+          let result = body.result;
+          if (body.resultJson) {
+            try { result = JSON.parse(body.resultJson); }
+            catch { return Response.json({ error: "Invalid result payload" }, { status: 400 }); }
+          }
+          recordSafariExtensionResult(body.installationId, body.credential, body.requestId, { ok: body.ok, result, error: body.error });
+          return Response.json({ ok: true });
+        } catch (error) {
+          return Response.json({ error: error instanceof Error ? error.message : "Result submission failed" }, { status: 401 });
+        }
+      }
+      // Served without bearer auth: the user's app loads this URL as a plain
+      // inline image. File names are unguessable UUIDs and the route is only
+      // reachable on localhost and the tailnet proxy.
+      if (req.method === "GET" && url.pathname.startsWith("/safari-extension/capture/")) {
+        const capture = readSafariCapture(url.pathname.slice("/safari-extension/capture/".length));
+        if (!capture) return new Response("Not Found", { status: 404 });
+        return new Response(capture.data, { headers: { "Content-Type": capture.contentType, "Cache-Control": "private, max-age=86400" } });
+      }
+      if (!isAuthorized(req)) return new Response("Unauthorized", { status: 401 });
+
+      if (req.method === "POST" && url.pathname === "/safari-extension/pairing-code") {
+        return Response.json(createSafariPairingCode());
+      }
+      if (req.method === "GET" && url.pathname === "/safari-extension/status") {
+        return Response.json(safariExtensionStatus());
+      }
+      if (req.method === "POST" && url.pathname === "/safari-extension/command") {
+        try {
+          const body = await req.json() as { command?: SafariExtensionCommand["command"]; payload?: Record<string, unknown>; installationId?: string };
+          const allowed = new Set<SafariExtensionCommand["command"]>(["open_tab", "navigate_tab", "get_active_tab", "close_tab", "capture_visible_tab", "get_page_snapshot", "page_action"]);
+          if (!body.command || !allowed.has(body.command)) return Response.json({ error: "Unsupported Safari command" }, { status: 400 });
+          return Response.json(dispatchSafariExtensionCommand({ command: body.command, payload: body.payload }, body.installationId));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Invalid command";
+          return Response.json({ error: message }, { status: 400 });
+        }
+      }
+      if (req.method === "GET" && url.pathname.startsWith("/safari-extension/result/")) {
+        const requestId = url.pathname.slice("/safari-extension/result/".length);
+        const result = getSafariExtensionResult(requestId);
+        if (!result) return Response.json({ error: "Result not available" }, { status: 404 });
+        return Response.json(result);
+      }
+      return new Response("Not Found", { status: 404 });
+    }
+
     if (req.method !== "POST" || url.pathname !== "/") {
       return new Response("Not Found", { status: 404 });
     }
 
     const token = extractBearerToken(req.headers.get("Authorization"));
-    if (
-      !token ||
-      token.length !== config.authToken.length ||
-      !timingSafeEqual(Buffer.from(token), Buffer.from(config.authToken))
-    ) {
+    if (!isAuthorized(req) || !token) {
       return new Response("Unauthorized", { status: 401 });
     }
 
@@ -405,10 +503,23 @@ Bun.serve({
         ),
       );
     } catch (err) {
+      if (err instanceof LLMInterruptedError) {
+        logger.error("LLM interrupted", { session: sessionId.slice(0, 8), error: err.message });
+        return toResponse(text("The AI provider had a temporary error and this request couldn't be completed. Please try again in a moment."));
+      }
       const message = err instanceof Error ? err.message : "LLM request failed";
       logger.error("LLM error", { session: sessionId.slice(0, 8), error: message });
       return toResponse(text("Sorry, I couldn't process your request. Please try again."));
     }
+  },
+
+  websocket: {
+    message(socket, message) {
+      handleSafariExtensionMessage(socket, typeof message === "string" ? message : new TextDecoder().decode(message));
+    },
+    close(socket) {
+      removeSafariExtensionSocket(socket);
+    },
   },
 });
 
@@ -421,6 +532,7 @@ if (config.dashboardEnabled) {
   logger.info(`  GET  ${base}/dashboard  → Dashboard`);
 }
 logger.info(`LLM: ${config.llmProvider}/${config.llmModel} (reasoning: ${config.llmReasoning})`);
+logger.info(`Quick LLM: ${config.llmQuickProvider}/${config.llmQuickModel} (reasoning: ${config.llmQuickReasoning})`);
 
 // Cleanup dev servers on shutdown
 process.on("SIGINT", () => { cleanupServers(); process.exit(0); });
