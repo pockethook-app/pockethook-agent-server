@@ -1,4 +1,4 @@
-import type { UserMessage, AssistantMessage, Message } from "@mariozechner/pi-ai";
+import type { UserMessage, AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { remember, recall, rememberAsync, recallHybrid, type MemoryEntry } from "./memory.js";
 import { queryTriples, searchTriples, type Triple } from "./knowledge-graph.js";
 import { extractQueryEntities } from "./vector-memory.js";

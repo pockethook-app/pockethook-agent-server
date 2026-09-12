@@ -6,7 +6,7 @@
  * State persists in data/servers.json so we know what's running across restarts.
  */
 
-import { spawn, execSync, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -35,6 +35,29 @@ interface ServerState {
 
 // In-memory child process references (not serializable)
 const processes = new Map<number, ChildProcess>();
+
+// ── Async command helpers ──────────────────────────────────────────────────
+// All external commands run in child processes so they never block the Bun
+// event loop (which would freeze HTTP/chat handling). Replaces the previous
+// synchronous execSync calls (lsof / which / tailscale).
+
+function runCmd(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
+  return new Promise((resolve) => {
+    let stdout = "";
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "ignore"] });
+    child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+    child.on("close", (code) => resolve({ code: code ?? 0, stdout }));
+    child.on("error", () => resolve({ code: -1, stdout }));
+  });
+}
+
+// Fire-and-forget: run a command we don't need to wait on (best-effort cleanup).
+function runCmdDetached(cmd: string, args: string[]): void {
+  try {
+    const child = spawn(cmd, args, { stdio: "ignore" });
+    child.on("error", () => {});
+  } catch {/* ignore */}
+}
 
 // ── State persistence ────────────────────────────────────────────────────
 
@@ -65,63 +88,52 @@ function isProcessAlive(pid: number): boolean {
 
 // ── Port detection ───────────────────────────────────────────────────────
 
-function isPortInUse(port: number): boolean {
-  try {
-    execSync(`lsof -i :${port} -sTCP:LISTEN`, { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+async function isPortInUse(port: number): Promise<boolean> {
+  return (await runCmd("lsof", ["-i", `:${port}`, "-sTCP:LISTEN"])).code === 0;
 }
 
-function findFreePort(startFrom: number): number {
+async function findFreePort(startFrom: number): Promise<number> {
   for (let port = startFrom; port < startFrom + 100; port++) {
-    if (!isPortInUse(port)) return port;
+    if (!(await isPortInUse(port))) return port;
   }
   return startFrom;
 }
 
 // ── Tunnel helpers ───────────────────────────────────────────────────────
 
-function commandExists(cmd: string): boolean {
-  try {
-    execSync(`which ${cmd}`, { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+async function commandExists(cmd: string): Promise<boolean> {
+  return (await runCmd("which", [cmd])).code === 0;
 }
 
-function getTailscaleHostname(): string | null {
+async function getTailscaleHostname(): Promise<string | null> {
   try {
-    const output = execSync("tailscale status --json", { encoding: "utf-8" });
-    const status = JSON.parse(output);
+    const { code, stdout } = await runCmd("tailscale", ["status", "--json"]);
+    if (code !== 0) return null;
+    const status = JSON.parse(stdout);
     const dns = status.Self?.DNSName;
     if (dns) return dns.replace(/\.$/, "");
   } catch {}
   return null;
 }
 
-function getTailscaleServePorts(): Set<number> {
+async function getTailscaleServePorts(): Promise<Set<number>> {
   const ports = new Set<number>();
-  try {
-    const output = execSync("tailscale serve status", { encoding: "utf-8" });
-    for (const line of output.split("\n")) {
-      const withPort = line.match(/https:\/\/[^:]+:(\d+)/);
-      if (withPort) {
-        ports.add(parseInt(withPort[1]!, 10));
-        continue;
-      }
-      if (line.match(/^https:\/\/[^\s:]+[\s(]/)) {
-        ports.add(443);
-      }
+  const { stdout } = await runCmd("tailscale", ["serve", "status"]);
+  for (const line of stdout.split("\n")) {
+    const withPort = line.match(/https:\/\/[^:]+:(\d+)/);
+    if (withPort) {
+      ports.add(parseInt(withPort[1]!, 10));
+      continue;
     }
-  } catch {}
+    if (line.match(/^https:\/\/[^\s:]+[\s(]/)) {
+      ports.add(443);
+    }
+  }
   return ports;
 }
 
-function findFreeTunnelPort(): number {
-  const used = getTailscaleServePorts();
+async function findFreeTunnelPort(): Promise<number> {
+  const used = await getTailscaleServePorts();
   const candidates = [9443, 10443, 11443, 12443, 13443, 14443, 15443];
   for (const port of candidates) {
     if (!used.has(port)) return port;
@@ -132,28 +144,26 @@ function findFreeTunnelPort(): number {
   return 9443;
 }
 
-function setupTailscaleTunnel(localPort: number): { httpsPort: number; url: string } | null {
-  if (!commandExists("tailscale")) return null;
+async function setupTailscaleTunnel(localPort: number): Promise<{ httpsPort: number; url: string } | null> {
+  if (!(await commandExists("tailscale"))) return null;
 
-  const hostname = getTailscaleHostname();
+  const hostname = await getTailscaleHostname();
   if (!hostname) return null;
 
-  const httpsPort = findFreeTunnelPort();
+  const httpsPort = await findFreeTunnelPort();
 
-  try {
-    execSync(`tailscale serve --bg --https ${httpsPort} http://localhost:${localPort}`, { stdio: "pipe" });
-    const portSuffix = httpsPort === 443 ? "" : `:${httpsPort}`;
-    return { httpsPort, url: `https://${hostname}${portSuffix}` };
-  } catch (err) {
-    logger.error("Failed to setup Tailscale tunnel", { error: err instanceof Error ? err.message : String(err) });
+  const { code } = await runCmd("tailscale", ["serve", "--bg", "--https", String(httpsPort), `http://localhost:${localPort}`]);
+  if (code !== 0) {
+    logger.error("Failed to setup Tailscale tunnel", { httpsPort, localPort });
     return null;
   }
+  const portSuffix = httpsPort === 443 ? "" : `:${httpsPort}`;
+  return { httpsPort, url: `https://${hostname}${portSuffix}` };
 }
 
+// Fire-and-forget — tunnel teardown is best-effort and must not block callers.
 function removeTailscaleTunnel(httpsPort: number): void {
-  try {
-    execSync(`tailscale serve --https ${httpsPort} off`, { stdio: "ignore" });
-  } catch {}
+  runCmdDetached("tailscale", ["serve", "--https", String(httpsPort), "off"]);
 }
 
 // ── Available tunnel info ────────────────────────────────────────────────
@@ -163,12 +173,10 @@ export interface TunnelInfo {
   available: boolean;
 }
 
-export function getAvailableTunnels(): TunnelInfo[] {
-  return [
-    { name: "tailscale", available: commandExists("tailscale") },
-    { name: "ngrok", available: commandExists("ngrok") },
-    { name: "cloudflared", available: commandExists("cloudflared") },
-  ];
+export async function getAvailableTunnels(): Promise<TunnelInfo[]> {
+  const names = ["tailscale", "ngrok", "cloudflared"];
+  const availability = await Promise.all(names.map((n) => commandExists(n)));
+  return names.map((name, i) => ({ name, available: availability[i]! }));
 }
 
 // ── Server management ────────────────────────────────────────────────────
@@ -181,14 +189,14 @@ export interface StartServerOptions {
   tunnel?: boolean;
 }
 
-export function startServer(opts: StartServerOptions): ServerEntry {
+export async function startServer(opts: StartServerOptions): Promise<ServerEntry> {
   const state = loadState();
 
   // Resolve cwd relative to workspace
   const resolvedCwd = resolve(opts.cwd);
 
   // Find a free port if not specified
-  const port = opts.port ?? findFreePort(4000);
+  const port = opts.port ?? (await findFreePort(4000));
 
   // Replace $PORT placeholder in command
   const command = opts.command.replace(/\$PORT/g, String(port));
@@ -236,7 +244,7 @@ export function startServer(opts: StartServerOptions): ServerEntry {
   let tunnelUrl: string | null = null;
 
   if (opts.tunnel) {
-    const tunnel = setupTailscaleTunnel(port);
+    const tunnel = await setupTailscaleTunnel(port);
     if (tunnel) {
       tunnelPort = tunnel.httpsPort;
       tunnelUrl = tunnel.url;

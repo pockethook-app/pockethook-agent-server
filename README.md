@@ -8,6 +8,23 @@ The server receives messages from PocketHook, processes them through an LLM with
 
 Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and multi-provider LLM abstraction) and inspired by [OpenClaw](https://github.com/nickytonline/OpenClaw)'s self-hosted, local-first approach to personal AI assistants.
 
+## Version 0.7.0
+
+Requires `pockethook-sdk` 0.1.3 and uses pinned pi packages 0.85.0. See [compatibility and protocol](docs/release-1-3.md) for the complete request/acknowledgement flow, attachment handling and upgrade procedure.
+
+- Durable intent and Share Extension submissions; stable result IDs and explicit acknowledgements for PocketHook 1.3. Older clients retain the existing protocol.
+- Authenticated uploads/downloads for images and documents; default 25 MiB limit and 30-day expiry.
+- Apple Bridge installation, pairing, capability permissions and status; bundled notarized companion 0.6.0 requires macOS 14+.
+- Safari installer and existing companion 1.0 (container requires macOS 26.5+).
+- Provider/model selection updates, asynchronous subprocess cancellation, streaming recovery and PDF/image input.
+
+```bash
+bun run apple-bridge:install
+bun run apple-bridge:code
+bun run apple-bridge:status
+bun run safari:install
+```
+
 ## Features
 
 - **Multi-provider LLM** — Anthropic, OpenAI, GitHub Copilot, Google, Mistral, Groq, xAI, OpenRouter, Ollama, LM Studio

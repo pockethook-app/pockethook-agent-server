@@ -35,9 +35,18 @@ const GROUPS: Array<{ title: string; commands: Array<[name: string, description:
   {
     title: "Safari extension",
     commands: [
+      ["safari:install", "Download and install the Safari extension app"],
       ["safari:config", "Set permission level and capture URL (optional)"],
       ["safari:code", "Generate a one-time pairing code"],
       ["safari:status", "Show paired installations and connection state"],
+    ],
+  },
+  {
+    title: "Apple Bridge (macOS)",
+    commands: [
+      ["apple-bridge:install", "Install or update the bundled notarized Apple Bridge app"],
+      ["apple-bridge:code", "Generate a one-time pairing code"],
+      ["apple-bridge:status", "Check the app, signature, local service and permissions"],
     ],
   },
   {

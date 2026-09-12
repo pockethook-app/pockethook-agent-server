@@ -25,7 +25,8 @@
     "create_custom_tool",
     "create_user_skill",
     "set_reasoning",
-    "safari"
+    "safari",
+    "apple_bridge"
   ],
   "shell": {
     "blockedCommands": ["shutdown", "reboot", "halt", "mkfs", "dd", "passwd", "chown", "chmod"],

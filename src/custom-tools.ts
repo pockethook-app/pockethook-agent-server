@@ -9,9 +9,10 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { cancelProcessOnAbort } from "./subprocess.js";
 import { spawn } from "child_process";
 import { Type } from "@sinclair/typebox";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { logger } from "./logger.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -172,7 +173,7 @@ export function loadCustomToolDefs(): CustomToolDef[] {
 
 const installedTools = new Set<string>();
 
-async function ensureInstalled(def: CustomToolDef, cwd: string): Promise<string | null> {
+async function ensureInstalled(def: CustomToolDef, cwd: string, signal?: AbortSignal): Promise<string | null> {
   if (!def.install || installedTools.has(def.toolName)) return null;
 
   return new Promise((resolve) => {
@@ -180,7 +181,10 @@ async function ensureInstalled(def: CustomToolDef, cwd: string): Promise<string 
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 120_000,
+      detached: !!signal && process.platform !== "win32",
     });
+
+    cancelProcessOnAbort(child, signal);
 
     let output = "";
     child.stdout?.on("data", (d: Buffer) => { output += d.toString(); });
@@ -229,9 +233,11 @@ export function createCustomAgentTool(def: CustomToolDef, cwd: string): AgentToo
     label: def.displayName,
     description: def.description,
     parameters: paramsSchema,
-    async execute(_id, params) {
+    async execute(_id, params, signal) {
+      signal?.throwIfAborted();
       // Ensure dependencies are installed
-      const installError = await ensureInstalled(def, cwd);
+      const installError = await ensureInstalled(def, cwd, signal);
+      signal?.throwIfAborted();
       if (installError) {
         return {
           content: [{ type: "text", text: installError }],
@@ -255,7 +261,10 @@ export function createCustomAgentTool(def: CustomToolDef, cwd: string): AgentToo
           cwd,
           stdio: ["ignore", "pipe", "pipe"],
           timeout: 60_000,
+          detached: !!signal && process.platform !== "win32",
         });
+
+        cancelProcessOnAbort(child, signal);
 
         child.stdout?.on("data", (d: Buffer) => { output += d.toString(); });
         child.stderr?.on("data", (d: Buffer) => { output += d.toString(); });

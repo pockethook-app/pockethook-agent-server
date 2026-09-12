@@ -1,5 +1,18 @@
 import { describe, test, expect } from "bun:test";
-import { parseInterval, isInterval, parseCron, nextCronDate, validateSchedule, nextRunFromSchedule } from "../src/jobs.js";
+import { Database } from "bun:sqlite";
+import {
+  parseInterval,
+  isInterval,
+  parseCron,
+  nextCronDate,
+  validateSchedule,
+  nextRunFromSchedule,
+  ensureJobsSchema,
+  createIntentJob,
+  initJobs,
+  IntentJobConflictError,
+  getIntentJobStatuses,
+} from "../src/jobs.js";
 
 describe("parseInterval", () => {
   test("parses seconds", () => {
@@ -204,5 +217,102 @@ describe("undelivered job summary ok flag", () => {
 
   test("no result (error path) means failure", () => {
     expect(okFlag({ result: null })).toBe(false);
+  });
+});
+
+describe("durable App Intent jobs", () => {
+  test("schema migration is additive and creates intent columns", () => {
+    const db = new Database(":memory:");
+    db.run(`
+      CREATE TABLE jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        schedule TEXT,
+        prompt TEXT NOT NULL,
+        execution_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        result TEXT,
+        error TEXT,
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        next_run_at INTEGER NOT NULL,
+        delivered INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1
+      )
+    `);
+
+    ensureJobsSchema(db);
+    const columns = db.query("PRAGMA table_info(jobs)").all() as { name: string }[];
+    const names = new Set(columns.map((column) => column.name));
+    expect(names.has("request_id")).toBe(true);
+    expect(names.has("session_id")).toBe(true);
+    expect(names.has("origin")).toBe(true);
+    expect(names.has("silent")).toBe(true);
+    db.close();
+  });
+
+  test("same request id returns one durable job", () => {
+    const db = new Database(":memory:");
+    const options = {
+      requestId: "1feab5d0-52f7-4c34-9b07-b8e0ca92a080",
+      sessionId: "session-1",
+      prompt: "Turn on the office lights",
+    };
+
+    const first = createIntentJob(options, db);
+    const duplicate = createIntentJob(options, db);
+
+    expect(first.created).toBe(true);
+    expect(duplicate.created).toBe(false);
+    expect(duplicate.job.id).toBe(first.job.id);
+    expect(db.query("SELECT COUNT(*) AS count FROM jobs").get()).toEqual({ count: 1 });
+    db.close();
+  });
+
+  test("reusing a request id for different content is rejected", () => {
+    const db = new Database(":memory:");
+    const requestId = "1feab5d0-52f7-4c34-9b07-b8e0ca92a080";
+    createIntentJob({ requestId, sessionId: "session-1", prompt: "First" }, db);
+
+    expect(() => createIntentJob({ requestId, sessionId: "session-1", prompt: "Second" }, db))
+      .toThrow(IntentJobConflictError);
+    db.close();
+  });
+
+  test("an interrupted intent is not automatically executed twice", () => {
+    const db = new Database(":memory:");
+    const created = createIntentJob({
+      requestId: "1feab5d0-52f7-4c34-9b07-b8e0ca92a080",
+      sessionId: "session-1",
+      prompt: "Create a reminder",
+    }, db).job;
+    db.run("UPDATE jobs SET status = 'running' WHERE id = ?", [created.id]);
+
+    initJobs(db);
+    const recovered = db.query("SELECT status, enabled, error FROM jobs WHERE id = ?").get(created.id) as {
+      status: string;
+      enabled: number;
+      error: string;
+    };
+
+    expect(recovered.status).toBe("failed");
+    expect(recovered.enabled).toBe(0);
+    expect(recovered.error).toContain("outcome unknown");
+    db.close();
+  });
+
+  test("status lookup returns only requested intent jobs", () => {
+    const db = new Database(":memory:");
+    const first = createIntentJob({ requestId: "request-1", sessionId: "session-1", prompt: "First" }, db).job;
+    createIntentJob({ requestId: "request-2", sessionId: "session-1", prompt: "Second" }, db);
+    db.run("UPDATE jobs SET status = 'completed', delivered = 1 WHERE id = ?", [first.id]);
+
+    expect(getIntentJobStatuses(["request-1", "missing"], db)).toEqual([{
+      requestId: "request-1",
+      status: "completed",
+      delivered: true,
+    }]);
+    db.close();
   });
 });
