@@ -10,6 +10,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import { setMainProvider } from "./setup-provider.js";
 import { DEFAULT_PERMISSIONS, loadPermissions, savePermissions, permissionsPath, type Permissions } from "./permissions.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -130,6 +131,7 @@ async function runOAuthLogin(
 
   const s = p.spinner();
   const creds = await oauth.login({
+    signal: new AbortController().signal,
     notify: (event) => {
       switch (event.type) {
         case "auth_url":
@@ -445,7 +447,7 @@ async function setup() {
   env.AUTH_TOKEN = authToken;
 
   const provider = await selectProvider(env);
-  env.LLM_PROVIDER = provider.key;
+  setMainProvider(env, provider.key);
 
   const model = await p.text({
     message: "Model ID",
@@ -677,6 +679,48 @@ async function setup() {
   }
 
   writeEnv(env);
+
+  // Safari extension (optional, macOS only — the notarized app ships with the server)
+  if (process.platform === "darwin" && existsSync(join(PROJECT_ROOT, "assets", "safari", "PocketHook-Safari.zip"))) {
+    const installSafari = await p.confirm({
+      message: "Install the PocketHook Safari extension? (lets the agent control Safari; optional)",
+      initialValue: false,
+    });
+    if (p.isCancel(installSafari)) cancelled();
+    if (installSafari) {
+      const { execSync } = await import("child_process");
+      try {
+        execSync("bun run src/safari-install.ts", { cwd: PROJECT_ROOT, stdio: "inherit" });
+        p.log.info(`Then set its permission level anytime with ${pc.cyan("bun run safari:config")}.`);
+      } catch {
+        p.log.warn(`Installation failed — you can retry later with ${pc.cyan("bun run safari:install")}.`);
+      }
+    } else {
+      p.log.info(`You can install it later with ${pc.cyan("bun run safari:install")}.`);
+    }
+  }
+
+  // Apple Bridge (optional, macOS only — the notarized app ships with the server)
+  if (process.platform === "darwin" && existsSync(join(PROJECT_ROOT, "assets", "apple-bridge", "PocketHook-Apple-Bridge.zip"))) {
+    const installAppleBridge = await p.confirm({
+      message: "Install PocketHook Apple Bridge? (Calendar, Reminders, Contacts, Music, iWork and Maps; optional)",
+      initialValue: false,
+    });
+    if (p.isCancel(installAppleBridge)) cancelled();
+    if (installAppleBridge) {
+      const { execFileSync } = await import("child_process");
+      try {
+        execFileSync(process.execPath, ["run", "src/apple-bridge-install.ts"], { cwd: PROJECT_ROOT, stdio: "inherit" });
+        p.log.info(`Start Agent Server, then pair the app with ${pc.cyan("bun run apple-bridge:code")}.`);
+        p.log.info("Choose the exact Apple resources and read/write/create actions from its menu-bar window.");
+      } catch {
+        p.log.warn(`Installation failed — you can retry later with ${pc.cyan("bun run apple-bridge:install")}.`);
+      }
+    } else {
+      p.log.info(`You can install it later with ${pc.cyan("bun run apple-bridge:install")}.`);
+    }
+  }
+
   p.outro(`${pc.green("Done!")} Run the server with ${pc.cyan("bun run start")}`);
 }
 
@@ -693,7 +737,7 @@ async function switchProvider() {
   }
 
   const provider = await selectProvider(env);
-  env.LLM_PROVIDER = provider.key;
+  setMainProvider(env, provider.key);
 
   const model = await p.text({
     message: "Model ID",
@@ -743,7 +787,7 @@ async function refreshToken() {
       access: env.LLM_API_KEY || "",
       refresh: refreshTk,
       expires: Number(env.OAUTH_TOKEN_EXPIRES) || 0,
-    });
+    }, AbortSignal.timeout(60_000));
 
     env.LLM_API_KEY = creds.access;
     env.OAUTH_REFRESH_TOKEN = creds.refresh;
@@ -860,6 +904,7 @@ async function configurePermissions() {
       { value: "web_search", label: "web_search", hint: "Search the web" },
       { value: "web_fetch", label: "web_fetch", hint: "Fetch and read web pages" },
       { value: "safari", label: "safari", hint: "Control a paired PocketHook Safari extension" },
+      { value: "apple_bridge", label: "apple_bridge", hint: "Access explicitly authorized Apple apps and actions through Apple Bridge (macOS)" },
       { value: "remember_fact", label: "remember_fact", hint: "Store facts in knowledge graph (requires semantic memory)" },
       { value: "query_facts", label: "query_facts", hint: "Query facts from knowledge graph (requires semantic memory)" },
       { value: "load_skill", label: "load_skill", hint: "Load full content of a skill on demand (recommended)" },

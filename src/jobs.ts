@@ -16,6 +16,8 @@ import { fileURLToPath } from "url";
 import { mkdirSync, existsSync } from "fs";
 import { loadPermissions, checkShellPermission } from "./permissions.js";
 import { logger } from "./logger.js";
+import { RunTimeoutError, withTimeout } from "./abort.js";
+import { ensureDeliverySchema, captureDeliveries, pendingDeliveries, deliveryForJob, acknowledgeDeliveries, acknowledgeLegacyJobs } from "./deliveries.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DATA_DIR = join(PROJECT_ROOT, "data");
@@ -40,6 +42,12 @@ export interface Job {
   enabled: number;
   on_complete_shortcut: string | null;
   on_complete_data: string | null;
+  retries: number;
+  silent: number;
+  timeout_ms: number | null;
+  request_id: string | null;
+  session_id: string | null;
+  origin: string | null;
 }
 
 export interface CreateJobOptions {
@@ -55,22 +63,33 @@ export interface CreateJobOptions {
   on_complete_data?: Record<string, unknown>;
 }
 
+export interface CreateIntentJobOptions {
+  requestId: string;
+  sessionId: string;
+  prompt: string;
+  silent?: boolean;
+  origin?: "app_intent" | "share";
+}
+
+export interface CreateIntentJobResult {
+  job: Job;
+  created: boolean;
+}
+
+export class IntentJobConflictError extends Error {
+  constructor() {
+    super("The request id is already associated with different content");
+    this.name = "IntentJobConflictError";
+  }
+}
+
 // ── Database ─────────────────────────────────────────────────────────────
 
 let db: Database | null = null;
 
-function getDb(): Database {
-  if (db) return db;
-
-  if (!existsSync(DATA_DIR)) {
-    mkdirSync(DATA_DIR, { recursive: true });
-  }
-
-  db = new Database(DB_PATH);
-  db.run("PRAGMA journal_mode=WAL");
-  db.run("PRAGMA busy_timeout=5000");
-
-  db.run(`
+/** Create or migrate the jobs schema. Exported so migrations can be tested in memory. */
+export function ensureJobsSchema(database: Database): void {
+  database.run(`
     CREATE TABLE IF NOT EXISTS jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -89,16 +108,55 @@ function getDb(): Database {
       on_complete_shortcut TEXT,
       on_complete_data TEXT,
       silent INTEGER NOT NULL DEFAULT 0,
-      timeout_ms INTEGER
+      timeout_ms INTEGER,
+      retries INTEGER NOT NULL DEFAULT 0,
+      request_id TEXT,
+      session_id TEXT,
+      origin TEXT
     )
   `);
 
-  // Migration: add columns if upgrading from older schema
-  try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_shortcut TEXT"); } catch {}
-  try { db.run("ALTER TABLE jobs ADD COLUMN on_complete_data TEXT"); } catch {}
-  try { db.run("ALTER TABLE jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0"); } catch {}
-  try { db.run("ALTER TABLE jobs ADD COLUMN silent INTEGER NOT NULL DEFAULT 0"); } catch {}
-  try { db.run("ALTER TABLE jobs ADD COLUMN timeout_ms INTEGER"); } catch {}
+  // Additive, backwards-compatible migrations for existing installations.
+  try { database.run("ALTER TABLE jobs ADD COLUMN on_complete_shortcut TEXT"); } catch {}
+  try { database.run("ALTER TABLE jobs ADD COLUMN on_complete_data TEXT"); } catch {}
+  try { database.run("ALTER TABLE jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0"); } catch {}
+  try { database.run("ALTER TABLE jobs ADD COLUMN silent INTEGER NOT NULL DEFAULT 0"); } catch {}
+  try { database.run("ALTER TABLE jobs ADD COLUMN timeout_ms INTEGER"); } catch {}
+  try { database.run("ALTER TABLE jobs ADD COLUMN request_id TEXT"); } catch {}
+  try { database.run("ALTER TABLE jobs ADD COLUMN session_id TEXT"); } catch {}
+  try { database.run("ALTER TABLE jobs ADD COLUMN origin TEXT"); } catch {}
+  database.run("CREATE UNIQUE INDEX IF NOT EXISTS jobs_request_id_unique ON jobs(request_id) WHERE request_id IS NOT NULL");
+  ensureDeliverySchema(database);
+}
+
+function getDb(): Database {
+  if (db) return db;
+
+  if (!existsSync(DATA_DIR)) {
+    mkdirSync(DATA_DIR, { recursive: true });
+  }
+
+  db = new Database(DB_PATH);
+  db.run("PRAGMA journal_mode=WAL");
+  db.run("PRAGMA busy_timeout=5000");
+
+  const existingColumns = db.query("PRAGMA table_info(jobs)").all() as { name: string }[];
+  const existingNames = new Set(existingColumns.map((column) => column.name));
+  const needsIntentMigration = existingColumns.length > 0 &&
+    ["request_id", "session_id", "origin"].some((column) => !existingNames.has(column));
+
+  if (needsIntentMigration) {
+    const backupDir = join(DATA_DIR, "backups");
+    mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = join(backupDir, `memory-before-intent-jobs-${stamp}.db`);
+    db.run("PRAGMA wal_checkpoint(FULL)");
+    db.run(`VACUUM INTO '${backupPath.replaceAll("'", "''")}'`);
+    logger.info("Created pre-migration database backup", { path: backupPath });
+  }
+
+  const migrate = db.transaction(() => ensureJobsSchema(db!));
+  migrate();
 
   return db;
 }
@@ -287,13 +345,26 @@ export function validateSchedule(schedule: string): { valid: boolean; error?: st
 
 // ── CRUD ─────────────────────────────────────────────────────────────────
 
-export function initJobs(): void {
-  const d = getDb();
+export function initJobs(database: Database = getDb()): void {
+  ensureJobsSchema(database);
 
-  // Recover jobs stuck in 'running' from a previous crash/restart
-  const stuck = d.run("UPDATE jobs SET status = 'pending' WHERE status = 'running'");
+  // Retrying an intent after the agent started could duplicate external tool
+  // side effects. Surface an unknown outcome instead; ordinary jobs retain
+  // their historical restart/retry behaviour.
+  const uncertain = database.run(
+    `UPDATE jobs
+     SET status = 'failed', error = 'Server restarted while this request was running; outcome unknown',
+         completed_at = ?, enabled = 0, delivered = CASE WHEN silent = 1 THEN 1 ELSE 0 END
+     WHERE status = 'running' AND origin IN ('app_intent', 'share')`,
+    [Date.now()],
+  );
+  if (uncertain.changes > 0) {
+    logger.warn(`Marked ${uncertain.changes} interrupted intent job(s) as outcome unknown`);
+  }
+
+  const stuck = database.run("UPDATE jobs SET status = 'pending' WHERE status = 'running'");
   if (stuck.changes > 0) {
-    logger.warn(`Recovered ${stuck.changes} stuck job(s) from 'running' → 'pending'`);
+    logger.warn(`Recovered ${stuck.changes} ordinary job(s) from 'running' → 'pending'`);
   }
 
   logger.info("Jobs system initialized");
@@ -349,9 +420,96 @@ export function createJob(opts: CreateJobOptions): Job {
   return getJob(Number(result.lastInsertRowid))!;
 }
 
+/** Persist an App Intent request before acknowledging it to the phone. */
+export function createIntentJob(
+  opts: CreateIntentJobOptions,
+  database: Database = getDb(),
+): CreateIntentJobResult {
+  ensureJobsSchema(database);
+  const origin = opts.origin ?? "app_intent";
+  const requestId = opts.requestId.trim();
+  const sessionId = opts.sessionId.trim();
+  if (!requestId || requestId.length > 128) throw new Error("Invalid request id");
+  if (!sessionId || sessionId.length > 256) throw new Error("Invalid session id");
+
+  const existing = database.query("SELECT * FROM jobs WHERE request_id = ?").get(requestId) as Job | null;
+  if (existing) {
+    if (existing.session_id !== sessionId || existing.prompt !== opts.prompt || existing.origin !== origin || existing.silent !== (opts.silent ? 1 : 0)) {
+      throw new IntentJobConflictError();
+    }
+    return { job: existing, created: false };
+  }
+
+  const now = Date.now();
+  const preview = opts.prompt.replace(/\s+/g, " ").trim();
+  const name = `${origin === "share" ? "Shared" : "Intent"}: ${preview.length > 60 ? `${preview.slice(0, 57)}…` : preview}`;
+  try {
+    const result = database.run(
+      `INSERT INTO jobs
+       (name, type, schedule, prompt, execution_type, status, created_at, next_run_at,
+        delivered, enabled, silent, retries, request_id, session_id, origin)
+       VALUES (?, 'once', NULL, ?, 'prompt', 'pending', ?, ?, 0, 1, ?, 0, ?, ?, ?)`,
+      [name, opts.prompt, now, now, opts.silent ? 1 : 0, requestId, sessionId, origin],
+    );
+    return { job: getJobFromDatabase(Number(result.lastInsertRowid), database)!, created: true };
+  } catch (error) {
+    // A concurrent duplicate may win the unique-index race between SELECT and INSERT.
+    const duplicate = database.query("SELECT * FROM jobs WHERE request_id = ?").get(requestId) as Job | null;
+    if (duplicate && duplicate.session_id === sessionId && duplicate.prompt === opts.prompt && duplicate.origin === origin && duplicate.silent === (opts.silent ? 1 : 0)) {
+      return { job: duplicate, created: false };
+    }
+    throw error;
+  }
+}
+
+function getJobFromDatabase(id: number, database: Database): Job | null {
+  return database.query("SELECT * FROM jobs WHERE id = ?").get(id) as Job | null;
+}
+
 export function getJob(id: number): Job | null {
-  const d = getDb();
-  return d.query("SELECT * FROM jobs WHERE id = ?").get(id) as Job | null;
+  return getJobFromDatabase(id, getDb());
+}
+
+export function getIntentJob(requestId: string): Job | null {
+  return getDb().query("SELECT * FROM jobs WHERE request_id = ?").get(requestId) as Job | null;
+}
+
+export interface IntentJobStatus {
+  requestId: string;
+  status: Job["status"];
+  delivered: boolean;
+}
+
+export function getIntentJobStatuses(
+  requestIds: string[],
+  database: Database = getDb(),
+): IntentJobStatus[] {
+  const uniqueIds = [...new Set(requestIds.map((id) => id.trim()).filter(Boolean))].slice(0, 50);
+  if (uniqueIds.length === 0) return [];
+  const placeholders = uniqueIds.map(() => "?").join(",");
+  const rows = database.query(
+    `SELECT request_id, status, delivered FROM jobs
+     WHERE origin = 'app_intent' AND request_id IN (${placeholders})`,
+  ).all(...uniqueIds) as { request_id: string; status: Job["status"]; delivered: number }[];
+  return rows.map((row) => ({
+    requestId: row.request_id,
+    status: row.status,
+    delivered: row.delivered === 1,
+  }));
+}
+
+export async function waitForIntentJob(requestId: string, timeoutMs: number): Promise<Job | null> {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (Date.now() < deadline) {
+    const job = getIntentJob(requestId);
+    if (!job || job.status === "completed" || job.status === "failed") return job;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return getIntentJob(requestId);
+}
+
+export function markJobDelivered(id: number): void {
+  acknowledgeLegacyJobs(getDb(), [id]);
 }
 
 export function listJobs(): Job[] {
@@ -359,10 +517,11 @@ export function listJobs(): Job[] {
   return d.query("SELECT * FROM jobs ORDER BY created_at DESC").all() as Job[];
 }
 
-export function deleteJob(id: number): boolean {
-  const d = getDb();
-  const result = d.run("DELETE FROM jobs WHERE id = ?", [id]);
-  return result.changes > 0;
+export function deleteJob(id: number, d: Database = getDb()): boolean {
+  return d.transaction(() => {
+    d.run("DELETE FROM job_deliveries WHERE job_id = ?", [id]);
+    return d.run("DELETE FROM jobs WHERE id = ?", [id]).changes > 0;
+  })();
 }
 
 export function updateJobEnabled(id: number, enabled: boolean): boolean {
@@ -373,26 +532,39 @@ export function updateJobEnabled(id: number, enabled: boolean): boolean {
 
 // ── Polling integration ──────────────────────────────────────────────────
 
-export function hasUndeliveredResults(): boolean {
+/**
+ * Queue an already-produced reply (e.g. from a Share Extension message
+ * processed asynchronously) for delivery through the same channel as job
+ * results: GET /jobs turns true, and fetchPendingTasks delivers it. The
+ * result is PocketHook-response JSON, so delivery renders it raw (no job
+ * prefix). status=completed + enabled=0 keeps the scheduler away from it.
+ */
+export function storeShareReply(name: string, userText: string, resultJson: string): number {
   const d = getDb();
-  const row = d.query(
-    "SELECT COUNT(*) as count FROM jobs WHERE delivered = 0 AND (result IS NOT NULL OR error IS NOT NULL)",
-  ).get() as { count: number };
-  return row.count > 0;
+  const now = Date.now();
+  const res = d
+    .prepare(
+      `INSERT INTO jobs (name, type, schedule, prompt, execution_type, status, result, created_at, completed_at, next_run_at, delivered, enabled, silent)
+       VALUES (?, 'once', NULL, ?, 'prompt', 'completed', ?, ?, ?, ?, 0, 0, 0)`,
+    )
+    .run(name, userText, resultJson, now, now, now);
+  return Number(res.lastInsertRowid);
+}
+
+export function getPendingDeliveries() { return pendingDeliveries(getDb()); }
+export function getDeliveryForJob(job: Job) { return deliveryForJob(getDb(), job); }
+export function confirmDeliveries(ids: string[]) { acknowledgeDeliveries(getDb(), ids); }
+
+export function hasUndeliveredResults(): boolean {
+  return getPendingDeliveries().length > 0;
 }
 
 export function getUndeliveredResults(): Job[] {
-  const d = getDb();
-  return d.query(
-    "SELECT * FROM jobs WHERE delivered = 0 AND (result IS NOT NULL OR error IS NOT NULL) ORDER BY completed_at ASC",
-  ).all() as Job[];
+  return getPendingDeliveries().map((delivery) => delivery.job);
 }
 
 export function markDelivered(ids: number[]): void {
-  if (ids.length === 0) return;
-  const d = getDb();
-  const placeholders = ids.map(() => "?").join(",");
-  d.run(`UPDATE jobs SET delivered = 1 WHERE id IN (${placeholders})`, ids);
+  acknowledgeLegacyJobs(getDb(), ids);
 }
 
 export interface UndeliveredJobSummary {
@@ -405,11 +577,9 @@ export interface UndeliveredJobSummary {
 // Lightweight view of undelivered jobs for the device's notification poll:
 // just enough to dedupe by id and show a descriptive title — no result payload.
 export function getUndeliveredJobSummaries(): UndeliveredJobSummary[] {
-  const d = getDb();
-  const rows = d.query(
-    "SELECT id, name, result, completed_at FROM jobs WHERE delivered = 0 AND (result IS NOT NULL OR error IS NOT NULL) ORDER BY completed_at ASC",
-  ).all() as { id: number; name: string; result: string | null; completed_at: number | null }[];
-  return rows.map((r) => ({ id: r.id, name: r.name, ok: r.result != null, completed_at: r.completed_at }));
+  const jobs = new Map(getUndeliveredResults().map((job) => [job.id, job]));
+  return [...jobs.values()].map((job) => ({ id: job.id, name: job.name, ok: job.result != null,
+    completed_at: job.completed_at }));
 }
 
 // ── Job execution ────────────────────────────────────────────────────────
@@ -446,27 +616,43 @@ function executeShell(command: string, cwd: string, timeoutMs: number = 60_000):
 
 let schedulerInterval: ReturnType<typeof setInterval> | null = null;
 let schedulerConfig: { workingDir: string; chatFn?: SchedulerChatFn } | null = null;
+let schedulerRun: Promise<void> | null = null;
+let schedulerRequested = false;
 
-type SchedulerChatFn = (prompt: string) => Promise<string>;
+type SchedulerChatFn = (job: Job, signal: AbortSignal) => Promise<string>;
 
 export function startScheduler(workingDir: string, chatFn?: SchedulerChatFn): void {
   schedulerConfig = { workingDir, chatFn };
 
   // Run scheduler tick every 60 seconds
-  schedulerInterval = setInterval(() => {
-    schedulerTick().catch((err) => {
-      logger.error("Scheduler tick error", { error: err instanceof Error ? err.message : String(err) });
-    });
-  }, 60_000);
+  schedulerInterval = setInterval(triggerScheduler, 60_000);
 
   // Also run once after 5 seconds to pick up any immediately due jobs
   setTimeout(() => {
-    schedulerTick().catch((err) => {
-      console.error("Scheduler initial tick error:", err instanceof Error ? err.message : err);
-    });
+    triggerScheduler();
   }, 5_000);
 
   logger.info("Job scheduler started (60s tick)");
+}
+
+/** Wake the scheduler immediately while keeping all executions globally serial. */
+export function triggerScheduler(): void {
+  schedulerRequested = true;
+  if (schedulerRun) return;
+
+  schedulerRun = (async () => {
+    while (schedulerRequested) {
+      schedulerRequested = false;
+      await schedulerTick();
+    }
+  })()
+    .catch((err) => {
+      logger.error("Scheduler tick error", { error: err instanceof Error ? err.message : String(err) });
+    })
+    .finally(() => {
+      schedulerRun = null;
+      if (schedulerRequested) triggerScheduler();
+    });
 }
 
 export function stopScheduler(): void {
@@ -483,18 +669,24 @@ async function schedulerTick(): Promise<void> {
   const d = getDb();
   const now = Date.now();
 
+  captureDeliveries(d);
   const dueJobs = d.query(
     "SELECT * FROM jobs WHERE enabled = 1 AND status = 'pending' AND next_run_at <= ? ORDER BY next_run_at ASC",
   ).all(now) as Job[];
 
   for (const job of dueJobs) {
-    // Mark as running
-    d.run("UPDATE jobs SET status = 'running' WHERE id = ?", [job.id]);
+    // Atomically claim the job. setInterval fires ticks on a fixed cadence
+    // without waiting for the previous tick to finish, so two overlapping
+    // ticks can select the same pending job — the conditional UPDATE ensures
+    // only one wins and the other skips it instead of double-running.
+    const claim = d.run("UPDATE jobs SET status = 'running' WHERE id = ? AND status = 'pending'", [job.id]);
+    if (claim.changes === 0) continue;
     logger.info(`Job #${job.id} running`, { name: job.name, type: job.execution_type });
 
     try {
       let output: string;
       let ok: boolean;
+      let timedOut = false;
 
       if (job.execution_type === "shell") {
         const jobTimeout = (job as any).timeout_ms ?? 60_000;
@@ -503,10 +695,12 @@ async function schedulerTick(): Promise<void> {
         ok = result.ok;
       } else if (job.execution_type === "prompt" && schedulerConfig.chatFn) {
         try {
-          output = await schedulerConfig.chatFn(job.prompt);
+          const chatFn = schedulerConfig.chatFn;
+          output = await withTimeout((signal) => chatFn(job, signal), job.timeout_ms ?? 30 * 60_000);
           ok = true;
         } catch (err) {
           output = err instanceof Error ? err.message : String(err);
+          timedOut = err instanceof RunTimeoutError;
           ok = false;
         }
       } else {
@@ -543,7 +737,7 @@ async function schedulerTick(): Promise<void> {
             ["Could not calculate next run time from schedule: " + job.schedule, completedAt, deliveredFlag, job.id],
           );
         }
-      } else if (!ok && job.type === "once" && (job as any).retries < MAX_RETRIES) {
+      } else if (!ok && !timedOut && job.type === "once" && job.origin !== "app_intent" && job.origin !== "share" && job.retries < MAX_RETRIES) {
         // Retry failed "once" jobs with exponential backoff
         const retryCount = ((job as any).retries ?? 0) + 1;
         const delay = RETRY_DELAYS[retryCount - 1] ?? RETRY_DELAYS[RETRY_DELAYS.length - 1]!;
@@ -567,5 +761,6 @@ async function schedulerTick(): Promise<void> {
         [msg, Date.now(), job.id],
       );
     }
+    captureDeliveries(d);
   }
 }

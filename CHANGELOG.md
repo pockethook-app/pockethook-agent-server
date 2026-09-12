@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 — 2026-09-12
+
+### Features
+
+- Durable App Intent and Share Extension jobs with request-ID deduplication, status queries, restart recovery and explicit result acknowledgements. Stable delivery/message IDs preserve results across network loss and recurring job runs.
+- Image and document uploads, vision input and PDF/text extraction. Upload downloads require Bearer authentication; expiry defaults to 30 days and upload size to 25 MiB.
+- Apple Bridge installation, pairing, status and capability-gated tools; signed/notarized 0.6.0 bundle. Safari installer and existing notarized companion bundle.
+- Response deep links and device-local photo query instructions. SDK 0.1.3.
+
+### Fixes and compatibility
+
+- Empty result collection returns false without invoking a model. Accepted shares are stored before returning 202. Interrupted intent/share jobs do not repeat side effects automatically.
+- Provider switching, model catalog supplementation, streaming error recovery and cancellation of timed subprocesses. Pin pi-ai and pi-agent-core to 0.85.0.
+- Preserve public per-instance service/log naming, installation overwrite protection and device-targeted note template.
+- Existing clients keep the legacy fetch behavior; reliable acknowledgements require the new capability/header. See docs/release-1-3.md for protocol, retention and migration details.
+
 ## 0.6.0 — 2026-08-14
 
 ### Features

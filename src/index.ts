@@ -1,4 +1,5 @@
-import { timingSafeEqual } from "crypto";
+import { readFileSync } from "fs";
+import { randomUUID, timingSafeEqual } from "crypto";
 import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "pockethook-sdk";
 import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale, getSkillTarget, getSyncAppForShortcut } from "./config.js";
 import { chat, LLMInterruptedError } from "./llm.js";
@@ -14,7 +15,27 @@ import { memoryStats, getDbPath } from "./memory.js";
 import { checkEmbeddingAvailable, configure as configureEmbeddings } from "./embeddings.js";
 import { migrateEmbeddings, configureClassifier } from "./vector-memory.js";
 import { loadPermissions } from "./permissions.js";
-import { initJobs, startScheduler, hasUndeliveredResults, getUndeliveredResults, getUndeliveredJobSummaries, markDelivered } from "./jobs.js";
+import {
+  initJobs,
+  startScheduler,
+  hasUndeliveredResults,
+  getUndeliveredResults,
+  getUndeliveredJobSummaries,
+  markDelivered,
+  getPendingDeliveries,
+  getDeliveryForJob,
+  confirmDeliveries,
+  createIntentJob,
+  getIntentJobStatuses,
+  waitForIntentJob,
+  markJobDelivered,
+  triggerScheduler,
+  IntentJobConflictError,
+  type Job,
+} from "./jobs.js";
+import { initUploads, saveUpload, readUpload, getUploadById, isImageUpload, extractUploadText, supportedUploadMime, cleanupUploads, MAX_UPLOAD_BYTES, UPLOAD_MARKER_RE } from "./uploads.js";
+import { deliveryResponses, jobResponses } from "./job-results.js";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { getDashboardHtml, getJobsJson, hasDistDashboard, serveDashboardAsset } from "./dashboard.js";
 import { initWorkspaceGit } from "./versioning.js";
 import { cleanupServers } from "./servers.js";
@@ -33,6 +54,11 @@ import {
   safariExtensionStatus,
   type SafariExtensionCommand,
 } from "./safari-extension.js";
+import {
+  appleBridgePairingStatus,
+  createAppleBridgePairingCode,
+  pairAppleBridgeInstallation,
+} from "./apple-bridge-pairing.js";
 
 const config = loadConfig();
 
@@ -58,6 +84,7 @@ if (permissions.filesystem.blockedPaths.length > 0) {
 
 // Initialize jobs system and workspace versioning
 initJobs();
+initUploads();
 initWorkspaceGit();
 
 // Semantic memory: check embedding provider availability if enabled
@@ -100,9 +127,13 @@ if (config.locale) {
 // Chat function for prompt-type jobs — stores full PocketHook response as JSON
 const JOB_PREFIX = "[BACKGROUND JOB] You are running inside a background job. Do the work directly — do NOT create more jobs. Use web_search, web_fetch, shell, read, write tools directly to complete the task.\n\n";
 
-const jobChatFn = async (prompt: string): Promise<string> => {
-  const jobMessages = [{ role: "user" as const, content: JOB_PREFIX + prompt, timestamp: Date.now() }];
-  const result = await chat(config, getSystemPrompt(config.agentName, false, config.userName, config.onboardingChat), jobMessages, tools);
+const jobChatFn = async (job: Job, signal: AbortSignal): Promise<string> => {
+  if ((job.origin === "app_intent" || job.origin === "share") && job.session_id) {
+    return JSON.stringify(await runChatPipeline(job.session_id, job.prompt, signal));
+  }
+
+  const jobMessages = [{ role: "user" as const, content: JOB_PREFIX + job.prompt, timestamp: Date.now() }];
+  const result = await chat(config, getSystemPrompt(config.agentName, false, config.userName, config.onboardingChat), jobMessages, tools, [], signal);
   return JSON.stringify(result);
 };
 
@@ -117,6 +148,52 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 const API_VERSION = "1";
+const INTENT_JOBS_CAPABILITY = "intent-jobs-v1,result-acks-v1,uploads-v1";
+const INTENT_WAIT_MS = 20_000;
+
+function intentAcceptedResponse(job: Job): Response {
+  return Response.json(
+    {
+      accepted: true,
+      requestId: job.request_id,
+      jobId: job.id,
+      status: job.status,
+    },
+    {
+      status: 202,
+      headers: { "X-PocketHook-Capabilities": INTENT_JOBS_CAPABILITY },
+    },
+  );
+}
+
+function completedIntentResponse(job: Job, acknowledgedDelivery = false): Response | null {
+  if (acknowledgedDelivery && !job.silent && (job.status === "completed" || job.status === "failed")) {
+    const delivery = getDeliveryForJob(job);
+    if (delivery) return Response.json(deliveryResponses(delivery));
+  }
+  if (job.status === "completed" && job.result) {
+    try {
+      const parsed = JSON.parse(job.result) as PocketHookResponse[];
+      if (!Array.isArray(parsed) || parsed.some((item) => !item || typeof item.msg !== "string")) return null;
+      markJobDelivered(job.id);
+      return toResponse(responses(parsed.map((item) => ({
+        msg: item.msg,
+        shortcut: item.shortcut,
+        data: item.data,
+        url: item.url,
+      }))));
+    } catch {
+      return null;
+    }
+  }
+
+  if (job.status === "failed") {
+    markJobDelivered(job.id);
+    return toResponse(text(`Sorry, I couldn't process your request. ${job.error || "Unknown error"}`));
+  }
+
+  return null;
+}
 
 function isAuthorized(req: Request): boolean {
   const token = extractBearerToken(req.headers.get("Authorization"));
@@ -174,10 +251,12 @@ async function executeShortcutOnServer(
 
 async function processServerSideShortcuts(
   pockethookResponses: PocketHookResponse[],
+  signal?: AbortSignal,
 ): Promise<PocketHookResponse[]> {
   const processed: PocketHookResponse[] = [];
 
   for (const r of pockethookResponses) {
+    signal?.throwIfAborted();
     if (r.run_on === "server" && r.shortcut) {
       if (!IS_MACOS) {
         logger.warn(`Shortcut "${r.shortcut}" marked as server-side but server is not macOS. Falling back to device.`);
@@ -205,8 +284,89 @@ async function processServerSideShortcuts(
   return processed;
 }
 
+/**
+ * Full chat pipeline shared by the synchronous handler and the
+ * asynchronous Share Extension path: history, context, LLM, server-side
+ * shortcuts, session bookkeeping.
+ */
+/**
+ * Resolves [FILE:<id>] markers in a message: image uploads become vision
+ * input, textual/PDF uploads are inlined as context, and each marker is
+ * replaced by a readable note (which is also what session history keeps).
+ */
+async function resolveAttachments(chatInput: string): Promise<{ text: string; images: ImageContent[] }> {
+  const images: ImageContent[] = [];
+  const inlined: string[] = [];
+  const matches = [...chatInput.matchAll(UPLOAD_MARKER_RE)];
+  let text = chatInput;
+  for (const match of matches) {
+    const upload = getUploadById(match[1] ?? "");
+    let note: string;
+    if (!upload) {
+      note = "[attached file no longer available]";
+    } else if (isImageUpload(upload)) {
+      images.push({
+        type: "image",
+        data: Buffer.from(readFileSync(upload.path)).toString("base64"),
+        mimeType: upload.mimeType,
+      });
+      note = `[attached image: ${upload.name}]`;
+    } else {
+      note = `[attached file: ${upload.name}]`;
+      const extracted = await extractUploadText(upload);
+      if (extracted) {
+        inlined.push(`--- Content of attached file "${upload.name}" ---\n${extracted}\n--- End of "${upload.name}" ---`);
+      } else {
+        note = `[attached file: ${upload.name} — stored at ${upload.path}, content not extractable]`;
+      }
+    }
+    text = text.replace(match[0], note);
+  }
+  if (inlined.length > 0) {
+    text = `${text}\n\n${inlined.join("\n\n")}`;
+  }
+  return { text, images };
+}
+
+async function runChatPipeline(
+  sessionId: string,
+  chatInput: string,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<typeof processServerSideShortcuts>>> {
+  signal?.throwIfAborted();
+  const { text: resolvedInput, images } = await resolveAttachments(chatInput);
+  signal?.throwIfAborted();
+  addUserMessage(sessionId, resolvedInput, config.vectorMemoryEnabled);
+
+  // Build context: recent messages + relevant memories (FTS5 + vector if enabled)
+  const messages = await buildContext(sessionId, resolvedInput, config.vectorMemoryEnabled, config.maxRecall);
+  const rawResponses = await chat(config, getSystemPrompt(config.agentName, config.vectorMemoryEnabled, config.userName, config.onboardingChat), messages, tools, images, signal);
+  signal?.throwIfAborted();
+
+  // Execute server-side shortcuts (macOS only) before sending to device
+  const pockethookResponses = await processServerSideShortcuts(rawResponses, signal);
+  signal?.throwIfAborted();
+
+  // Store summary in session history
+  const summaryText = pockethookResponses.map((r) => r.msg).join("\n");
+  addAssistantMessage(sessionId, {
+    role: "assistant",
+    content: [{ type: "text", text: summaryText }],
+    api: "anthropic-messages" as any,
+    provider: config.llmProvider,
+    model: config.llmModel,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  }, config.vectorMemoryEnabled);
+  trimHistory(sessionId, config.maxHistory);
+
+  return pockethookResponses;
+}
+
 const server = Bun.serve({
   port: config.port,
+  maxRequestBodySize: Math.max(MAX_UPLOAD_BYTES, 1_048_576),
 
   async fetch(req) {
     const url = new URL(req.url);
@@ -220,7 +380,13 @@ const server = Bun.serve({
     }
 
     if (req.method === "GET" && url.pathname === "/health") {
-      return new Response("true", { status: 200, headers: { "X-API-Version": API_VERSION } });
+      return new Response("true", {
+        status: 200,
+        headers: {
+          "X-API-Version": API_VERSION,
+          "X-PocketHook-Capabilities": INTENT_JOBS_CAPABILITY,
+        },
+      });
     }
 
     if (req.method === "GET" && url.pathname === "/jobs") {
@@ -240,6 +406,46 @@ const server = Bun.serve({
       const pending = hasUndeliveredResults();
       logger.debug("GET /jobs", { pending });
       return new Response(pending ? "true" : "false", { status: 200 });
+    }
+
+    // File uploads from the app / Share Extension. Stored under
+    // data/uploads and referenced from chat messages via [FILE:<id>].
+    if (req.method === "POST" && url.pathname === "/uploads") {
+      if (!isAuthorized(req)) return new Response("Unauthorized", { status: 401 });
+      const mimeType = ((req.headers.get("content-type") || "").split(";")[0] ?? "").trim().toLowerCase();
+      if (!supportedUploadMime(mimeType)) {
+        return Response.json({ error: `Unsupported file type: ${mimeType || "unknown"}` }, { status: 415 });
+      }
+      const raw = await req.arrayBuffer();
+      if (raw.byteLength > MAX_UPLOAD_BYTES) {
+        return new Response("Payload Too Large", { status: 413 });
+      }
+      let name: string | undefined;
+      try {
+        name = decodeURIComponent(req.headers.get("x-file-name") || "") || undefined;
+      } catch {
+        name = undefined;
+      }
+      try {
+        const meta = saveUpload(new Uint8Array(raw), mimeType, name);
+        return Response.json(
+          { id: meta.id, file: meta.file, path: `/uploads/${meta.file}`, name: meta.name },
+          { status: 201 },
+        );
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : "Upload failed" }, { status: 400 });
+      }
+    }
+
+    // Uploads are private resources; UUID filenames are identifiers, not credentials.
+    if (req.method === "GET" && url.pathname.startsWith("/uploads/")) {
+      if (!isAuthorized(req)) return new Response("Unauthorized", { status: 401 });
+      const upload = readUpload(url.pathname.slice("/uploads/".length));
+      if (!upload) return new Response("Not Found", { status: 404 });
+      return new Response(upload.data, {
+        status: 200,
+        headers: { "Content-Type": upload.contentType, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" },
+      });
     }
 
     if (req.method === "GET" && (url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"))) {
@@ -318,7 +524,7 @@ const server = Bun.serve({
       if (req.method === "GET" && url.pathname.startsWith("/safari-extension/capture/")) {
         const capture = readSafariCapture(url.pathname.slice("/safari-extension/capture/".length));
         if (!capture) return new Response("Not Found", { status: 404 });
-        return new Response(capture.data, { headers: { "Content-Type": capture.contentType, "Cache-Control": "private, max-age=86400" } });
+        return new Response(capture.data, { headers: { "Content-Type": capture.contentType, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
       }
       if (!isAuthorized(req)) return new Response("Unauthorized", { status: 401 });
 
@@ -346,6 +552,63 @@ const server = Bun.serve({
         return Response.json(result);
       }
       return new Response("Not Found", { status: 404 });
+    }
+
+    if (url.pathname.startsWith("/apple-bridge/")) {
+      // The one-time code is the authorization for this single native request,
+      // matching Safari's pairing flow. Every management route still requires
+      // the Agent Server's normal bearer token.
+      if (req.method === "POST" && url.pathname === "/apple-bridge/native/pair") {
+        try {
+          const body = await req.json() as { installationId?: string; code?: string };
+          if (!body.installationId || !body.code) {
+            return Response.json({ error: "installationId and code are required" }, { status: 400 });
+          }
+          return Response.json(pairAppleBridgeInstallation(body.installationId, body.code));
+        } catch (error) {
+          return Response.json({ error: error instanceof Error ? error.message : "Pairing failed" }, { status: 400 });
+        }
+      }
+
+      if (!isAuthorized(req)) return new Response("Unauthorized", { status: 401 });
+      if (req.method === "POST" && url.pathname === "/apple-bridge/pairing-code") {
+        return Response.json(createAppleBridgePairingCode());
+      }
+      if (req.method === "GET" && url.pathname === "/apple-bridge/status") {
+        return Response.json(appleBridgePairingStatus());
+      }
+      return new Response("Not Found", { status: 404 });
+    }
+
+    if (req.method === "POST" && url.pathname === "/deliveries/ack") {
+      if (!isAuthorized(req)) return new Response("Unauthorized", { status: 401 });
+      try {
+        const raw = await req.arrayBuffer();
+        if (raw.byteLength > 16_384) return new Response("Payload Too Large", { status: 413 });
+        const body = JSON.parse(new TextDecoder().decode(raw));
+        if (!Array.isArray(body.ids) || body.ids.length > 100 ||
+            body.ids.some((id: unknown) => typeof id !== "string" || !/^[0-9a-f-]{36}$/.test(id))) {
+          return Response.json({ error: "ids must contain at most 100 delivery UUIDs" }, { status: 400 });
+        }
+        confirmDeliveries(body.ids);
+        return Response.json({ acknowledged: true });
+      } catch { return Response.json({ error: "Invalid acknowledgement" }, { status: 400 }); }
+    }
+
+    if (req.method === "POST" && url.pathname === "/intent-jobs/status") {
+      if (!isAuthorized(req)) return new Response("Unauthorized", { status: 401 });
+      try {
+        const statusBody = await req.arrayBuffer();
+        if (statusBody.byteLength > 16_384) return new Response("Payload Too Large", { status: 413 });
+        const body = JSON.parse(new TextDecoder().decode(statusBody)) as { requestIds?: unknown };
+        if (!Array.isArray(body.requestIds) || body.requestIds.length > 50 ||
+            body.requestIds.some((id) => typeof id !== "string" || id.length === 0 || id.length > 128)) {
+          return Response.json({ error: "requestIds must contain at most 50 valid ids" }, { status: 400 });
+        }
+        return Response.json({ jobs: getIntentJobStatuses(body.requestIds as string[]) });
+      } catch {
+        return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+      }
     }
 
     if (req.method !== "POST" || url.pathname !== "/") {
@@ -392,104 +655,80 @@ const server = Bun.serve({
 
     logger.info("Chat request", { session: sessionId.slice(0, 8), inputLength: chatInput.length });
 
-    // Direct delivery: if fetchPendingTasks and there are completed jobs, respond immediately without LLM
-    const undelivered = getUndeliveredResults();
-    if (undelivered.length > 0 && chatInput.toLowerCase().includes(config.fetchMessage)) {
-      const IMAGE_URL_RE = /^https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?$/i;
-      const extractDirectImageUrl = (value: unknown): string | null => {
-        if (typeof value !== "string") return null;
-        const trimmed = value.trim();
-        if (IMAGE_URL_RE.test(trimmed)) return trimmed;
-        return null;
-      };
-      const jobResponses: { msg: string; shortcut?: string; data?: Record<string, unknown>; url?: string }[] = [];
-
-      for (const j of undelivered) {
-        if (j.result) {
-          // Try to parse as PocketHook response JSON (from prompt-type jobs)
-          try {
-            const parsed = JSON.parse(j.result);
-            if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].msg) {
-              for (const step of parsed) {
-                const imageMsg = extractDirectImageUrl(step?.msg);
-                if (imageMsg) {
-                  jobResponses.push({ msg: imageMsg });
-                } else {
-                  jobResponses.push({
-                    msg: step.msg,
-                    shortcut: step.shortcut,
-                    data: step.data,
-                    url: step.url,
-                  });
-                }
-              }
-              continue;
-            }
-          } catch {
-            // Not JSON — treat as plain text (expected for shell job output)
-          }
-          // Shell job or non-JSON result — wrap with optional shortcut.
-          // If the whole result is already a direct image URL with a valid extension,
-          // preserve it as-is so iOS can render the inline image.
-          const imageResult = extractDirectImageUrl(j.result);
-          if (imageResult) {
-            jobResponses.push({ msg: imageResult });
-            continue;
-          }
-
-          let data: Record<string, unknown> | undefined;
-          if (j.on_complete_data) {
-            try {
-              const template = JSON.parse(j.on_complete_data);
-              // Inject output into data under "output" key
-              data = { ...template, output: j.result };
-            } catch {
-              data = { output: j.result };
-            }
-          } else if (j.on_complete_shortcut) {
-            data = { output: j.result };
-          }
-
-          jobResponses.push({
-            msg: `✅ Job #${j.id} "${j.name}"\n${j.result}`,
-            shortcut: j.on_complete_shortcut || undefined,
-            data,
-          });
-        } else {
-          jobResponses.push({ msg: `❌ Job #${j.id} "${j.name}"\n${j.error || "No output"}` });
-        }
+    // New clients retain each result until they confirm local durable storage.
+    if (chatInput.toLowerCase().includes(config.fetchMessage)) {
+      const deliveries = getPendingDeliveries();
+      if (deliveries.length === 0) return toResponse(text("false"));
+      if (req.headers.get("x-pockethook-result-acks") === "1") {
+        return Response.json(deliveries.flatMap(deliveryResponses));
       }
-
-      const ids = undelivered.map((j) => j.id);
-      markDelivered(ids);
-      logger.info("Delivered job results directly", { session: sessionId.slice(0, 8), count: undelivered.length, ids });
-
-      return toResponse(responses(jobResponses));
+      const legacyResponses = deliveries.flatMap((delivery) => jobResponses(delivery.job));
+      markDelivered(deliveries.map((delivery) => delivery.job.id));
+      return Response.json(legacyResponses);
     }
 
-    addUserMessage(sessionId, chatInput, config.vectorMemoryEnabled);
+    // App Intents need to finish before iOS terminates their background host.
+    // Persist first, then acknowledge. Both modes use the same durable job:
+    // wait=1 may return a quick result, while wait=0 always returns immediately.
+    if (req.headers.get("x-pockethook-intent") === "1") {
+      const requestId = (req.headers.get("x-pockethook-request-id") || "").trim();
+      if (!requestId) {
+        return Response.json({ error: "x-pockethook-request-id is required" }, { status: 400 });
+      }
+
+      try {
+        const { job, created } = createIntentJob({
+          requestId,
+          sessionId,
+          prompt: chatInput,
+          silent: req.headers.get("x-pockethook-silent") === "1",
+        });
+        logger.info(created ? "Intent job queued" : "Intent job deduplicated", {
+          job: job.id,
+          session: sessionId.slice(0, 8),
+          request: requestId.slice(0, 8),
+        });
+
+        if (job.status === "completed" || job.status === "failed") {
+          return completedIntentResponse(job, req.headers.get("x-pockethook-result-acks") === "1") ?? intentAcceptedResponse(job);
+        }
+
+        triggerScheduler();
+        if (req.headers.get("x-pockethook-wait") === "1") {
+          const completed = await waitForIntentJob(requestId, INTENT_WAIT_MS);
+          if (completed) {
+            const direct = completedIntentResponse(completed, req.headers.get("x-pockethook-result-acks") === "1");
+            if (direct) return direct;
+            return intentAcceptedResponse(completed);
+          }
+        }
+
+        return intentAcceptedResponse(job);
+      } catch (error) {
+        if (error instanceof IntentJobConflictError) {
+          return Response.json({ error: error.message }, { status: 409 });
+        }
+        const message = error instanceof Error ? error.message : "Could not queue intent";
+        logger.error("Intent queue failed", { error: message });
+        return Response.json({ error: message }, { status: 400 });
+      }
+    }
+
+    // Persist before acknowledging, including older extensions without request IDs.
+    if (req.headers.get("x-pockethook-share") === "1") {
+      try {
+        const requestId = req.headers.get("x-pockethook-request-id")?.trim() || randomUUID();
+        const { job } = createIntentJob({ requestId, sessionId, prompt: chatInput, origin: "share" });
+        triggerScheduler();
+        return intentAcceptedResponse(job);
+      } catch (error) {
+        return Response.json({ error: "Could not queue shared content" },
+          { status: error instanceof IntentJobConflictError ? 409 : 400 });
+      }
+    }
 
     try {
-      // Build context: recent messages + relevant memories (FTS5 + vector if enabled)
-      const messages = await buildContext(sessionId, chatInput, config.vectorMemoryEnabled, config.maxRecall);
-      const rawResponses = await chat(config, getSystemPrompt(config.agentName, config.vectorMemoryEnabled, config.userName, config.onboardingChat), messages, tools);
-
-      // Execute server-side shortcuts (macOS only) before sending to device
-      const pockethookResponses = await processServerSideShortcuts(rawResponses);
-
-      // Store summary in session history
-      const summaryText = pockethookResponses.map((r) => r.msg).join("\n");
-      addAssistantMessage(sessionId, {
-        role: "assistant",
-        content: [{ type: "text", text: summaryText }],
-        api: "anthropic-messages" as any,
-        provider: config.llmProvider,
-        model: config.llmModel,
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      }, config.vectorMemoryEnabled);
-      trimHistory(sessionId, config.maxHistory);
+      const pockethookResponses = await runChatPipeline(sessionId, chatInput);
 
       // Build PocketHook SDK response — pass all fields (msg, shortcut, data, url)
       return toResponse(

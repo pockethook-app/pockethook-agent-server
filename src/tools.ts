@@ -14,6 +14,7 @@
  * return an error result (the agent sees it and can adjust).
  */
 
+import { cancelProcessOnAbort } from "./subprocess.js";
 import { spawn } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from "fs";
 import { readFile, writeFile, readdir, stat } from "fs/promises";
@@ -33,6 +34,7 @@ import { REASONING_VALUES, updateEnvFile } from "./config.js";
 import { logger } from "./logger.js";
 import { VALID_ROOMS, VALID_HALLS, VALID_STATUSES } from "./vector-memory.js";
 import { dispatchSafariExtensionCommand, getSafariExtensionResult, saveSafariCapture, type SafariExtensionCommand } from "./safari-extension.js";
+import { createAppleBridgeTool } from "./apple-bridge.js";
 
 function stringEnum(values: readonly string[], description: string) {
   return Type.Union(values.map((v) => Type.Literal(v)) as any, { description });
@@ -113,7 +115,7 @@ function createShellTool(cwd: string, perms: Permissions): AgentTool<typeof shel
     label: "Execute shell command",
     description: "Execute a shell command and return its output (stdout + stderr).",
     parameters: shellSchema,
-    async execute(_id, params) {
+    async execute(_id, params, signal) {
       const check = checkShellPermission(params.command, perms);
       if (!check.allowed) return denied(check.reason!);
 
@@ -124,7 +126,10 @@ function createShellTool(cwd: string, perms: Permissions): AgentTool<typeof shel
           cwd,
           stdio: ["ignore", "pipe", "pipe"],
           timeout,
+          detached: !!signal && process.platform !== "win32",
         });
+
+        cancelProcessOnAbort(child, signal);
 
         child.stdout?.on("data", (d: Buffer) => { output += d.toString(); });
         child.stderr?.on("data", (d: Buffer) => { output += d.toString(); });
@@ -301,7 +306,7 @@ export interface PocketHookResponse {
 // Shared: optional URL attached to a response. Rendered by the iOS app as a
 // link / preview alongside the message. Sanitized for localhost rewrites.
 const urlSchema = Type.Optional(Type.String({
-  description: "Optional HTTPS URL attached to the response. Use this when the message references something the user should be able to tap (web page, image, document). Distinct from msg — the URL is rendered as a separate link, not embedded in the text.",
+  description: "Optional URL attached to the response, rendered as a separate tappable link (not embedded in the text). Accepts https web URLs (opened in the in-app browser) AND app deep links — things:///show?id=…, spotify:, obsidian://, shortcuts://run-shortcut?name=… — which open that app directly on the user's device. A special deep link pockethook://photos shows photos from the user's own photo library inside the app (photos stay on the device; params optional and combinable; the user must have the feature enabled in the app's Settings). Filters: date=YYYY-MM-DD | YYYY-MM | YYYY (a day, a whole month, or a whole year), from=/to= for ranges (same formats, inclusive), album=Name, favorites=true, latest=N (max 500). With a date filter ALL matching photos are included — do NOT add latest unless the user asks for 'the last N'. It can also carry ONE action applied to the matched photos after the user confirms with a tap: addToAlbum=Name (creates the album if missing), setFavorite=true|false, or delete=true — e.g. pockethook://photos?date=2026-08-18&addToAlbum=Beach creates/fills an album with that day's photos. Deep links never auto-open; the user must tap the link. If you are unsure the user has the target app installed, say which app the link needs. Never send tel:, sms:, facetime: or install links — the app blocks them.",
 }));
 
 // Shared: button spec used by respond_buttons and sequence steps.
@@ -311,7 +316,7 @@ const buttonSchema = Type.Object({
     Type.Literal("sendMessage"),
     Type.Literal("openURL"),
     Type.Literal("triggerShortcut"),
-  ], { description: "sendMessage: value is sent back as a new message. openURL: value is an https URL opened in the browser. triggerShortcut: value is the exact name of an iOS Shortcut to run." }),
+  ], { description: "sendMessage: value is sent back as a new message. openURL: value is a URL — https opens in the browser, and an app URL scheme (things:///, spotify:, shortcuts://…) opens that app directly, and pockethook://photos shows photos from the user's photo library inside the app — filters date=YYYY-MM-DD|YYYY-MM|YYYY, from=/to= ranges, album=Name, favorites=true, latest=N max 500 (omit latest when filtering by date), optionally with one action the user confirms in-app: addToAlbum=Name, setFavorite=true|false or delete=true; tel:/sms:/facetime: are blocked by the app. triggerShortcut: value is the exact name of an iOS Shortcut to run." }),
   value: Type.String({ description: "Value for the action: message text, URL, or shortcut name." }),
 });
 
@@ -1656,6 +1661,8 @@ const CORE_TOOL_NAMES = new Set([
   "run_code_job",
   "respond_text", "respond_image", "respond_buttons", "respond_shortcut", "respond_html", "respond_sequence",
   "create_custom_tool", "create_user_skill",
+  "safari",
+  "apple_bridge",
 ]);
 
 type CustomToolParam = {
@@ -2056,7 +2063,7 @@ function createSafariTool(): AgentTool<typeof safariSchema> {
 
 // ── Tool factory ────────────────────────────────────────────────────────
 
-type ToolName = "shell" | "read" | "write" | "ls" | "create_project" | "list_projects" | "delete_project" | "create_once_job" | "create_cron_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory" | "remember_fact" | "query_facts" | "load_skill" | "update_memory_status" | "complete_project" | "create_custom_tool" | "create_user_skill" | "set_reasoning" | "safari";
+type ToolName = "shell" | "read" | "write" | "ls" | "create_project" | "list_projects" | "delete_project" | "create_once_job" | "create_cron_job" | "list_jobs" | "delete_job" | "web_search" | "web_fetch" | "start_server" | "stop_server" | "list_servers" | "search_memory" | "remember_fact" | "query_facts" | "load_skill" | "update_memory_status" | "complete_project" | "create_custom_tool" | "create_user_skill" | "set_reasoning" | "safari" | "apple_bridge";
 
 // Tool names that are added separately (respond sub-tools, run_code_job, custom
 // tools). Permissions may reference them; this set prevents false warnings.
@@ -2099,6 +2106,7 @@ export function createTools(cwd: string, perms: Permissions, config?: Config): A
     create_user_skill: () => createCreateUserSkillTool(),
     set_reasoning: () => createSetReasoningTool(config!),
     safari: () => createSafariTool(),
+    apple_bridge: () => createAppleBridgeTool(),
   };
 
   const tools: AgentTool<any>[] = [];

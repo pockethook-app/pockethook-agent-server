@@ -1,63 +1,14 @@
+import { withAbort } from "./abort.js";
 import { Agent } from "@earendil-works/pi-agent-core";
-import { getModel, getModels } from "@earendil-works/pi-ai/compat";
-import type { AssistantMessage, Model, Api, Message } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, Model, Api, Message, ImageContent } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Config } from "./config.js";
 import { updateEnvFile } from "./config.js";
 import { createRespondTools, createRunCodeJobTool, type PocketHookResponse } from "./tools.js";
 import { FAKE_ACK_TEXT } from "./sessions.js";
 import { logger } from "./logger.js";
-
-/**
- * Resolve a Model object from provider + model ID.
- */
-function resolveModelFor(provider: string, modelId: string, baseUrl?: string): Model<Api> {
-  try {
-    const model = getModel(provider as any, modelId as any);
-    if (model) return model;
-  } catch {}
-
-  try {
-    const models = getModels(provider as any);
-    const found = models.find((m) => m.id === modelId);
-    if (found) return found;
-  } catch {}
-
-  const apiMap: Record<string, Api> = {
-    anthropic: "anthropic-messages",
-    openai: "openai-completions",
-    "openai-codex": "openai-codex-responses",
-    "github-copilot": "anthropic-messages",
-    google: "google-generative-ai",
-    mistral: "mistral-conversations",
-    groq: "openai-completions",
-    xai: "openai-completions",
-    openrouter: "openai-completions",
-    cerebras: "openai-completions",
-    ollama: "openai-completions",
-    "lm-studio": "openai-completions",
-  };
-
-  const defaultBaseUrls: Record<string, string> = {
-    ollama: "http://localhost:11434/v1",
-    "lm-studio": "http://localhost:1234/v1",
-  };
-
-  return {
-    id: modelId,
-    name: modelId,
-    provider,
-    api: apiMap[provider] || "openai-completions",
-    baseUrl: baseUrl || defaultBaseUrls[provider] || "",
-    reasoning: false,
-    input: ["text"] as ("text" | "image")[],
-    maxTokens: 8192,
-    contextWindow: (provider === "ollama" || provider === "lm-studio") ? 32768 : 128000,
-    maxOutputTokens: 8192,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    supportedInputs: ["text"],
-  } as Model<Api>;
-}
+import { resolveModelFor } from "./llm-models.js";
 
 function resolveModel(config: Config): Model<Api> {
   return resolveModelFor(config.llmProvider, config.llmModel, config.llmBaseUrl);
@@ -112,7 +63,7 @@ async function ensureFreshApiKey(config: Config): Promise<string> {
       access: config.llmApiKey,
       refresh: config.oauthRefreshToken,
       expires: config.oauthTokenExpires ?? 0,
-    });
+    }, AbortSignal.timeout(60_000));
 
     config.llmApiKey = creds.access;
     config.oauthRefreshToken = creds.refresh;
@@ -164,6 +115,7 @@ export async function quickPrompt(config: Config, prompt: string, maxTokens: num
   // One retry on stream errors (provider 5xx etc.); tool-free, so retrying is safe.
   for (let attempt = 0; attempt < 2; attempt++) {
     const agent = new Agent({
+      streamFn: streamSimple,
       initialState: {
         systemPrompt: "You are a JSON classifier. Respond ONLY with valid JSON, no other text.",
         model,
@@ -208,7 +160,10 @@ export async function chat(
   systemPrompt: string,
   messages: Message[],
   tools: AgentTool<any>[],
+  images: ImageContent[] = [],
+  signal?: AbortSignal,
 ): Promise<PocketHookResponse[]> {
+  signal?.throwIfAborted();
   if (!cachedModel) {
     cachedModel = resolveModel(config);
     logger.info(`LLM resolved: ${cachedModel.provider}/${cachedModel.id} (api: ${cachedModel.api}, reasoning: ${config.llmReasoning})`);
@@ -216,6 +171,7 @@ export async function chat(
   const model = cachedModel;
 
   const apiKey = await ensureFreshApiKey(config);
+  signal?.throwIfAborted();
 
   // Capture the respond tool's output. run_code_job emits an ack through the
   // same callback so the "create job + respond" orchestration happens in a
@@ -227,7 +183,13 @@ export async function chat(
   const respondTools = createRespondTools(onRespond);
   const runCodeJobTool = createRunCodeJobTool(config.workingDir, onRespond);
 
-  const allTools = [...tools, ...respondTools, runCodeJobTool];
+  const allTools = [...tools, ...respondTools, runCodeJobTool].map((tool) => ({
+    ...tool,
+    execute: (id: string, params: any, toolSignal?: AbortSignal, onUpdate?: any) => {
+      const combined = signal && toolSignal ? AbortSignal.any([signal, toolSignal]) : signal ?? toolSignal;
+      return withAbort(() => tool.execute(id, params, combined, onUpdate), combined);
+    },
+  }));
 
   // Get last user message text
   const lastMessage = messages[messages.length - 1];
@@ -243,6 +205,10 @@ export async function chat(
         .join("");
 
   const makeAgent = () => new Agent({
+    streamFn: (...args) => {
+      signal?.throwIfAborted();
+      return streamSimple(...args);
+    },
     initialState: {
       systemPrompt,
       model,
@@ -254,6 +220,8 @@ export async function chat(
   });
 
   let agent = makeAgent();
+  const prompt = (text: string, images?: ImageContent[]) =>
+    withAbort(() => agent.prompt(text, images), signal, () => agent.abort());
   // Boundary so the fallback below cannot pick up text from prior turns.
   let turnStartIdx = agent.state.messages.length;
 
@@ -263,7 +231,9 @@ export async function chat(
   // attempt executed no tools — otherwise side effects could run twice.
   const MAX_STREAM_RETRIES = 2;
   for (let attempt = 0; ; attempt++) {
-    await agent.prompt(userText);
+    // Attached images ride along with the user turn as vision input; the
+    // retry path recreates the agent, so they are passed on every attempt.
+    await prompt(userText, images.length > 0 ? images : undefined);
     const streamError = agent.state.errorMessage;
     if (pockethookResponses || !streamError) break;
 
@@ -296,12 +266,13 @@ export async function chat(
       await new Promise((resolve) => setTimeout(resolve, 3000 * (attempt + 1)));
       logger.warn(`LLM turn interrupted by stream error, asking it to resume (${attempt + 1}/${RESUME_ATTEMPTS})`);
       try {
-        await agent.prompt(
+        await prompt(
           "Your previous turn was interrupted by a temporary provider error mid-task. " +
           "Continue the task exactly where you left off — do not repeat work that already succeeded. " +
           "When the task is genuinely finished, call exactly ONE respond_* tool with the final answer.",
         );
       } catch (err) {
+        signal?.throwIfAborted();
         logger.warn("Resume attempt failed", { error: err instanceof Error ? err.message : String(err) });
       }
       if (!agent.state.errorMessage) break; // ended cleanly; a missing respond_* is handled below
@@ -323,13 +294,14 @@ export async function chat(
   if (!pockethookResponses) {
     logger.warn("LLM finished without respond_*, requesting one via steering prompt");
     try {
-      await agent.prompt(
+      await prompt(
         "Your previous turn ended without sending a reply to the user. " +
         "Call exactly ONE respond_* tool NOW with the answer: respond_text for a normal message, " +
         "respond_buttons for choices, respond_image for an image URL, respond_shortcut for an iOS Shortcut, " +
         "respond_html for rich HTML, or respond_sequence to chain steps. Do not call any other tool first."
       );
     } catch (err) {
+      signal?.throwIfAborted();
       logger.warn("Steering retry failed", { error: err instanceof Error ? err.message : String(err) });
     }
     if (agent.state.errorMessage) {

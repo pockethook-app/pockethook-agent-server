@@ -109,6 +109,13 @@ const GROUPS: Array<{ title: string; entries: Entry[] }> = [
     ],
   },
   {
+    title: "Apple Bridge (macOS)",
+    entries: [
+      { key: "APPLE_BRIDGE_URL", default: "http://127.0.0.1:32123 (local only)" },
+      { key: "APPLE_BRIDGE_APP_URL", default: "bundled notarized app" },
+    ],
+  },
+  {
     title: "Locale",
     entries: [
       { key: "LOCALE_CITY" },
@@ -177,5 +184,11 @@ if (existsSync(pairingFile)) {
     console.log();
     console.log(pc.dim(`Safari pairings on disk: ${count} (details: bun run safari:status)`));
   } catch { /* Unreadable pairing file is safari:status's problem. */ }
+}
+
+if (process.platform === "darwin") {
+  const appleBridgeApp = "/Applications/PocketHook Apple Bridge.app";
+  console.log();
+  console.log(pc.dim(`Apple Bridge installed: ${existsSync(appleBridgeApp) ? "yes" : "no"} (details: bun run apple-bridge:status)`));
 }
 console.log();

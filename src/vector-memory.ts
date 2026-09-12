@@ -307,7 +307,8 @@ export async function searchSemantic(
   }[];
 
   const scored: VectorSearchResult[] = [];
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
     const vec = blobToVector(row.embedding);
     const score = cosineSimilarity(queryEmbedding, vec);
     scored.push({
@@ -318,6 +319,9 @@ export async function searchSemantic(
       status: row.status,
       score,
     });
+    // Yield to the event loop periodically so a large vector set doesn't
+    // block HTTP/chat handling while scoring.
+    if ((i & 511) === 511) await new Promise((r) => setTimeout(r, 0));
   }
 
   scored.sort((a, b) => b.score - a.score);
@@ -411,9 +415,11 @@ export async function completeProject(
   let archived = 0;
   let keptAsResource = 0;
 
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
     const vec = blobToVector(row.embedding);
     const score = cosineSimilarity(queryEmbedding, vec);
+    if ((i & 511) === 511) await new Promise((r) => setTimeout(r, 0));
     if (score < threshold) continue;
 
     if (archiveSet.has(row.room)) {
