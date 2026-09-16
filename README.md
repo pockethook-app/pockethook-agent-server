@@ -8,7 +8,21 @@ The server receives messages from PocketHook, processes them through an LLM with
 
 Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent framework and multi-provider LLM abstraction) and inspired by [OpenClaw](https://github.com/nickytonline/OpenClaw)'s self-hosted, local-first approach to personal AI assistants.
 
-## Version 0.7.0
+## Version 0.8.0 — PocketHook 1.4 pairing
+
+Connect the app without copying credentials. On macOS, start the configured server and its HTTPS tunnel, then run:
+
+```bash
+bun run app:qr
+```
+
+The command detects this instance's existing Tailscale route and displays a five-minute, single-use invitation in the terminal. In PocketHook 1.4, open **Settings → Manage servers → Add server → Scan QR**. Other HTTPS tunnels can use `--url https://server.example`; `--open` also opens a PNG. The local renderer requires the Swift toolchain from Xcode or Command Line Tools. The pairing HTTP endpoints work on all supported server platforms.
+
+A single server, including QR setup, is available without Pro. Keeping multiple profiles in the app requires Pro or an active trial. One app purchase covers all profiles; Agent Server has no additional Pro purchase. This connects as the existing server owner, not as a separate user.
+
+See the [QR guide](docs/app-pairing.md) and [1.4 compatibility and upgrade notes](docs/release-1-4.md).
+
+### Included from 0.7.0
 
 Requires `pockethook-sdk` 0.1.3 and uses pinned pi packages 0.85.0. See [compatibility and protocol](docs/release-1-3.md) for the complete request/acknowledgement flow, attachment handling and upgrade procedure.
 

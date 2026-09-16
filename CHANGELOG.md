@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0 — release candidate for PocketHook 1.4
+
+### Features
+
+- Connect PocketHook 1.4 using an expiring, single-use QR invitation. Authenticated creation and bounded redemption endpoints work on every supported server platform.
+- `bun run app:qr` on macOS detects an existing Tailscale HTTPS route for this instance and its configured agent name. Non-default HTTPS ports and multiple instances are supported; explicit URLs remain available for other tunnel providers.
+- Display the QR directly in the terminal and save a restricted temporary PNG. `--open` opens the image; narrow terminals receive the file path rather than an unreadable wrapped code.
+- Import the chat endpoint, credentials, health check, pending jobs and optional Personal UI into the selected app profile. QR invitations expire after five minutes, and regeneration or a server restart invalidates them.
+
+### Compatibility
+
+- Pairing grants the existing server owner's access; this release does not add multi-user permissions. The QR never contains the permanent server token.
+- Retains 0.7.0 result acknowledgements, durable shares, authenticated attachments, timeouts and per-instance service names. PocketHook 1.3 clients remain supported; QR profile setup requires 1.4.
+- SDK 0.1.3, pinned pi packages 0.85.0, Apple Bridge 0.6.0 and Safari companion 1.0 are unchanged.
+
 ## 0.7.0 — 2026-09-12
 
 ### Features

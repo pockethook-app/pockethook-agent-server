@@ -1,4 +1,5 @@
 import { readFileSync } from "fs";
+import { createAppPairingHandler } from "./app-pairing.js";
 import { randomUUID, timingSafeEqual } from "crypto";
 import { parseRequest, extractBearerToken, response, responses, text, toResponse } from "pockethook-sdk";
 import { loadConfig, getSystemPrompt, autoDetectLocale, setLocale, getSkillTarget, getSyncAppForShortcut } from "./config.js";
@@ -364,12 +365,20 @@ async function runChatPipeline(
   return pockethookResponses;
 }
 
+const handleAppPairing = createAppPairingHandler({
+  authToken: config.authToken,
+  fetchMessage: config.fetchMessage,
+  dashboardEnabled: config.dashboardEnabled,
+  isAuthorized,
+});
+
 const server = Bun.serve({
   port: config.port,
   maxRequestBodySize: Math.max(MAX_UPLOAD_BYTES, 1_048_576),
 
   async fetch(req) {
     const url = new URL(req.url);
+    if (url.pathname.startsWith("/app-pairing/")) return handleAppPairing(req);
 
     if (url.pathname === "/safari-extension") {
       if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {

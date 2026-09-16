@@ -2,6 +2,12 @@ node_modules/
 dist/
 data/
 .env
+.env.*
+!.env.example
+*.p8
+*.p12
+*.key
+*.mobileprovision
 *.log
 .DS_Store
 workspace/*

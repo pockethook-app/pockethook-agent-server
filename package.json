@@ -1,6 +1,6 @@
 {
   "name": "pockethook-agent-server",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "PocketHook agent server with LLM integration via pi-ai",
   "type": "module",
   "scripts": {
@@ -22,6 +22,7 @@
     "dev:tunnel": "bun run src/dev-tunnel.ts",
     "logs": "bun run src/logs.ts",
     "test": "bun test",
+    "app:qr": "bun run src/app-pair.ts",
     "safari:install": "bun run src/safari-install.ts",
     "apple-bridge:install": "bun run src/apple-bridge-install.ts",
     "apple-bridge:code": "bun run src/apple-bridge-pair.ts",

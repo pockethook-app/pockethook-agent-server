@@ -39,6 +39,25 @@ test("HTTP result replay, explicit acknowledgement, protected uploads and durabl
       await Bun.sleep(20);
     }
     const headers = { Authorization: "Bearer fixture-token", "Content-Type": "application/json" };
+    const pairingBody = JSON.stringify({ serverURL: "https://example.test:8443/", name: "Work Demo" });
+    expect((await fetch(`${base}/app-pairing/code`, { method: "POST", body: pairingBody })).status).toBe(401);
+    const invitation = await fetch(`${base}/app-pairing/code`, { method: "POST", headers, body: pairingBody });
+    expect(invitation.status).toBe(201);
+    expect(invitation.headers.get("Cache-Control")).toBe("no-store");
+    const pairing = await invitation.json() as { qr: string };
+    expect(pairing.qr).not.toContain("fixture-token");
+    const code = JSON.parse(pairing.qr).code;
+    const redeem = () => fetch(`${base}/app-pairing/redeem`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }),
+    });
+    const configured = await redeem();
+    expect(configured.status).toBe(200);
+    expect(configured.headers.get("Cache-Control")).toBe("no-store");
+    expect(await configured.json()).toMatchObject({
+      version: 1, name: "Work Demo", serverURL: "https://example.test:8443/", authToken: "fixture-token",
+      healthCheckURL: "https://example.test:8443/health", pollingURL: "https://example.test:8443/jobs",
+    });
+    expect((await redeem()).status).toBe(410);
     const body = (chatInput: string) => JSON.stringify([{ sessionId, action: "sendMessage", chatInput }]);
     const collect = async () => {
       const response = await fetch(base, { method: "POST", headers: { ...headers, "x-pockethook-result-acks": "1" }, body: body("fetchPendingTasks") });

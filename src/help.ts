@@ -23,6 +23,7 @@ const GROUPS: Array<{ title: string; commands: Array<[name: string, description:
   {
     title: "Configuration",
     commands: [
+      ["app:qr", "Connect PocketHook 1.4 with a one-use QR in the terminal (macOS)"],
       ["setup", "Full interactive onboarding (provider, keys, personality…)"],
       ["config", "Show the current configuration (secrets masked)"],
       ["switch", "Switch LLM provider/model"],
