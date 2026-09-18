@@ -42,7 +42,7 @@ Product changes are developed on branches of this public repository. Run a separ
 
 Compared the private working tree (including uncommitted product files) with this release branch. Pairing, provider switching, model catalog updates, streaming recovery, cancellation and timeouts were already carried over. The remaining general improvement was a reminder to finish user-facing turns through the structured response tools; it now preserves the existing acknowledgement emitted by a successful `run_code_job`.
 
-Private dashboard/metrics integrations, workspace content and the Mac-specific note preference remain installation customizations. Keep the public implementation of durable deliveries, authenticated uploads and per-instance services. Private files are not a replacement for these newer public implementations. No private history or runtime data is imported. This release branch stays local until Apple approval and the coordinated launch.
+Private dashboard/metrics integrations, workspace content and the Mac-specific note preference remain installation customizations. Keep the public implementation of durable deliveries, authenticated uploads and per-instance services. Private files are not a replacement for these newer public implementations. No private history or runtime data is imported. Apple approved PocketHook 1.4 on 18 September 2026; Agent Server 0.8.0 accompanies its coordinated public launch.
 
 ## Release preparation validation
 

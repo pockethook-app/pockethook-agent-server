@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8.0 — release candidate for PocketHook 1.4
+## 0.8.0 — 2026-09-18
 
 ### Features
 
