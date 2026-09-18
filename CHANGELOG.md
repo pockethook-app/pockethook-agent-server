@@ -9,6 +9,11 @@
 - Display the QR directly in the terminal and save a restricted temporary PNG. `--open` opens the image; narrow terminals receive the file path rather than an unreadable wrapped code.
 - Import the chat endpoint, credentials, health check, pending jobs and optional Personal UI into the selected app profile. QR invitations expire after five minutes, and regeneration or a server restart invalidates them.
 
+### Fixes
+
+- Reinforce structured app replies after tool use, while avoiding duplicate acknowledgements from successful background programming jobs.
+- Update profile documentation for optional iCloud/Keychain synchronization and per-server chat appearance. These app features do not change the server protocol.
+
 ### Compatibility
 
 - Pairing grants the existing server owner's access; this release does not add multi-user permissions. The QR never contains the permanent server token.

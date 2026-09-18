@@ -33,7 +33,7 @@ The configuration includes the chat endpoint, authentication token, `/health`, `
 - `POST /app-pairing/redeem`: body `{ "code": "..." }`; returns the server configuration once. Expired or reused invitations return 410.
 - Invitations expire after five minutes, and generating another one invalidates the previous invitation. Restarting the server invalidates invitations too.
 - Codes are stored hashed in memory. Replies use `Cache-Control: no-store`. The app refuses redirects during redemption.
-- The permanent server token is never encoded in the QR. After redemption it is held in the app's device-local Keychain, independently for each server profile.
+- The permanent server token is never encoded in the QR. After redemption it is held in Apple Keychain, independently for each server profile. When the user enables iCloud sync for that profile, the app also synchronizes its credentials through iCloud Keychain. Both devices must use the same Apple Account with iCloud Keychain enabled; credentials may arrive after the profile.
 
 Pairing grants the existing owner's access. This feature does not add multi-user accounts, family sharing or permission isolation between people.
 

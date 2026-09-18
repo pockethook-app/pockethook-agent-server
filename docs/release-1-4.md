@@ -10,7 +10,7 @@ The CLI renders the QR in the terminal, saves a PNG in a restricted temporary di
 
 In PocketHook 1.4, use **Settings → Manage servers → Add server → Scan QR**, or import the PNG. Check the host before confirming. The configuration includes the endpoint, owner token, health check, pending jobs, fetch message and optional Personal UI. See the [complete QR guide](app-pairing.md).
 
-Invitations contain a random 256-bit code, never the permanent token. They expire after five minutes, are consumed once, and are invalidated by regeneration or restart. The app receives the token over HTTPS after redemption and stores it separately in its device-local Keychain.
+Invitations contain a random 256-bit code, never the permanent token. They expire after five minutes, are consumed once, and are invalidated by regeneration or restart. The app receives the token over HTTPS after redemption and stores it in Apple Keychain, separately for each profile. Opting a profile into iCloud sync also enables credential delivery through iCloud Keychain.
 
 ## Separate profiles, existing owner access
 
@@ -18,7 +18,9 @@ Invitations contain a random 256-bit code, never the permanent token. They expir
 - Each profile retains its own endpoint, token, chat, draft, session, links, queue, delivery receipts and server-specific settings. Work started against one profile keeps that destination when the selected profile changes.
 - Shortcuts and the Share Extension can select a profile. Existing Shortcuts without an explicit destination retain the original profile.
 - Adding profiles does not create separate users on a server. Scanning a server owner's QR grants that owner's existing access. For isolated deployments, use separate server instances with separate runtime directories and credentials.
-- The app's original profile keeps its existing iCloud behavior. Additional profiles stay local in 1.4 and must be configured separately on each device.
+- Profiles can stay local or opt into private iCloud synchronization. Each device chooses which profiles to add from Available in iCloud; activation and the selected server remain device-specific. Name, emoji, appearance, connection settings, delivered messages and links sync; credentials use iCloud Keychain, not the server. The original conversation retains its existing sync.
+- The app checks pending jobs for eligible profiles while active, even when another chat is selected. Background scheduling remains controlled by the operating system.
+- Chat wallpapers, bubble colors/opacity, reply-option cards and top/sidebar navigation are app features. They require no server payload changes or new SDK/Apple Bridge version. Wallpapers and appearance settings are never sent to Agent Server.
 
 ## Upgrade an existing installation
 
@@ -35,6 +37,12 @@ Dependencies remain SDK 0.1.3 and pi packages 0.85.0. Apple Bridge 0.6.0 and Saf
 ## Development and publication
 
 Product changes are developed on branches of this public repository. Run a separate checkout/instance with synthetic data, its own port and credentials, then connect it using another app profile. Private installations consume reviewed public releases while retaining their ignored runtime data; do not copy a private Git history or personal workspace into this repository.
+
+## Final private/public audit — 18 September 2026
+
+Compared the private working tree (including uncommitted product files) with this release branch. Pairing, provider switching, model catalog updates, streaming recovery, cancellation and timeouts were already carried over. The remaining general improvement was a reminder to finish user-facing turns through the structured response tools; it now preserves the existing acknowledgement emitted by a successful `run_code_job`.
+
+Private dashboard/metrics integrations, workspace content and the Mac-specific note preference remain installation customizations. Keep the public implementation of durable deliveries, authenticated uploads and per-instance services. Private files are not a replacement for these newer public implementations. No private history or runtime data is imported. This release branch stays local until Apple approval and the coordinated launch.
 
 ## Release preparation validation
 
